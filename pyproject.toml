@@ -7,7 +7,7 @@ name = "cor-text"
 version = "0.1.4"
 description = "Cor - Plain text knowledge management for the terminal"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
     {name = "lbugnon", email = "lbugnon@sinc.unl.edu.ar"}
