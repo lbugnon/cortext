@@ -17,15 +17,14 @@ from ..sync import MaintenanceRunner
 @cli.command()
 @click.option("--message", "-m", type=str, help="Custom commit message")
 @click.option("--no-push", is_flag=True, help="Commit only, don't push")
-@click.option("--no-pull", is_flag=True, help="Skip pull before commit")
-@click.option("--autostash", is_flag=True, help="Automatically stash local changes before pull")
+@click.option("--no-pull", is_flag=True, help="Skip pull before push")
 @click.option("--full-sync", "full_sync", is_flag=True, help="Sync all Telegram messages including previously read ones")
 @click.option("--delete-after-inbox", "delete_after_inbox", is_flag=True, help="Delete Telegram messages after syncing instead of just acknowledging them")
 @require_init
-def sync(message: str | None, no_push: bool, no_pull: bool, autostash: bool, full_sync: bool, delete_after_inbox: bool):
+def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, delete_after_inbox: bool):
     """Sync vault with git remote.
 
-    Convenient workflow: pull → commit all changes → push
+    Workflow: commit local changes → pull → push
     Auto-generates commit message based on changes.
 
     \b
@@ -53,7 +52,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, autostash: bool, ful
     if bot_token:
         try:
             added = pull_remote_inbox(
-                notes_dir, 
+                notes_dir,
                 bot_token,
                 full_sync=full_sync,
                 delete_after_sync=delete_after_inbox
@@ -78,68 +77,61 @@ def sync(message: str | None, no_push: bool, no_pull: bool, autostash: bool, ful
             # Non-fatal: continue with git sync even if calendar sync fails
             click.echo(click.style(f"Calendar sync failed: {e}", fg="yellow"), err=True)
 
-    # Step 1: Pull (unless skipped)
+    # Step 1: Commit local changes first (if any) so the working tree is clean before pull
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True
+    )
+    changes = result.stdout.strip()
+
+    if changes:
+        click.echo("\nChanges to commit:")
+        for line in changes.split("\n"):
+            status_char = line[:2].strip()
+            filename = line[2:]
+            if status_char == "M":
+                click.echo(f"  {click.style('modified:', fg='yellow')} {filename}")
+            elif status_char == "A":
+                click.echo(f"  {click.style('added:', fg='green')} {filename}")
+            elif status_char == "D":
+                click.echo(f"  {click.style('deleted:', fg='red')} {filename}")
+            elif status_char == "?":
+                click.echo(f"  {click.style('untracked:', fg='cyan')} {filename}")
+            else:
+                click.echo(f"  {status_char} {filename}")
+
+        subprocess.run(["git", "add", "-A"], check=True)
+
+        commit_msg = message
+        if not commit_msg:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            commit_msg = f"Vault sync {now}"
+
+        click.echo(f"\nCommitting: {commit_msg}")
+        result = subprocess.run(
+            ["git", "commit", "-m", commit_msg],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise ExternalServiceError(f"Commit failed: {result.stderr}")
+    else:
+        click.echo(click.style("No local changes to commit.", fg="green"))
+
+    # Step 2: Pull (unless skipped)
     if not no_pull:
         click.echo("Pulling from remote...")
-        
-        # Handle autostash: stash local changes before pull
-        stash_popped = False
-        if autostash:
-            # Check if there are local changes
-            status_result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True, text=True
-            )
-            if status_result.stdout.strip():
-                click.echo("Auto-stashing local changes...")
-                stash_result = subprocess.run(
-                    ["git", "stash", "push", "-m", "cor sync autostash"],
-                    capture_output=True, text=True
-                )
-                if stash_result.returncode == 0:
-                    stash_popped = True
-                else:
-                    click.echo(click.style(f"Warning: stash failed: {stash_result.stderr}", fg="yellow"))
-        
         result = subprocess.run(
             ["git", "pull"],
             capture_output=True, text=True
         )
-        
-        # Pop stash after pull (regardless of success, to avoid leaving stash behind)
-        if stash_popped:
-            click.echo("Restoring local changes...")
-            pop_result = subprocess.run(
-                ["git", "stash", "pop"],
-                capture_output=True, text=True
-            )
-            if pop_result.returncode != 0:
-                click.echo(click.style(
-                    "Warning: Could not restore stashed changes. "
-                    "They remain in the stash. Use 'git stash pop' to restore manually.",
-                    fg="yellow"
-                ))
-        
         if result.returncode != 0:
             if "no tracking information" in result.stderr:
                 click.echo(click.style("No remote tracking branch. Skipping pull.", dim=True))
-            elif "will be overwritten" in result.stderr or "local changes" in result.stderr.lower():
-                # Local uncommitted changes would be overwritten
-                raise ExternalServiceError(
-                    "Pull failed: You have local uncommitted changes that conflict with remote.\n\n"
-                    "Quick fix:\n"
-                    "  cor sync --autostash    # Auto-stash, pull, then restore\n\n"
-                    "Or manually:\n"
-                    "  1. Commit first: cor sync --no-pull\n"
-                    "  2. Stash: git stash && cor sync\n"
-                    "  3. Force overwrite: git reset --hard && cor sync\n"
-                    f"\nDetails: {result.stderr}"
-                )
             else:
                 raise ExternalServiceError(f"Pull failed: {result.stderr}")
         elif result.stdout.strip():
             click.echo(result.stdout.strip())
-        
+
         # Check for merge conflicts after pull
         conflict_result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=U"],
@@ -159,51 +151,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, autostash: bool, ful
                 "  git merge --abort && cor sync --no-pull"
             )
 
-    # Step 2: Check for changes
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True
-    )
-    changes = result.stdout.strip()
-
-    if not changes:
-        click.echo(click.style("No changes to commit.", fg="green"))
-        return
-
-    # Show what will be committed
-    click.echo("\nChanges to commit:")
-    for line in changes.split("\n"):
-        status_char = line[:2].strip()
-        filename = line[2:]
-        if status_char == "M":
-            click.echo(f"  {click.style('modified:', fg='yellow')} {filename}")
-        elif status_char == "A":
-            click.echo(f"  {click.style('added:', fg='green')} {filename}")
-        elif status_char == "D":
-            click.echo(f"  {click.style('deleted:', fg='red')} {filename}")
-        elif status_char == "?":
-            click.echo(f"  {click.style('untracked:', fg='cyan')} {filename}")
-        else:
-            click.echo(f"  {status_char} {filename}")
-
-    # Step 3: Stage all changes
-    subprocess.run(["git", "add", "-A"], check=True)
-
-    # Step 4: Commit
-    if not message:
-        # Auto-generate commit message
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        message = f"Vault sync {now}"
-
-    click.echo(f"\nCommitting: {message}")
-    result = subprocess.run(
-        ["git", "commit", "-m", message],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        raise ExternalServiceError(f"Commit failed: {result.stderr}")
-
-    # Step 5: Push (unless skipped)
+    # Step 3: Push (unless skipped)
     if not no_push:
         click.echo("Pushing to remote...")
         result = subprocess.run(
@@ -218,7 +166,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, autostash: bool, ful
         else:
             click.echo(click.style("Synced!", fg="green"))
     else:
-        click.echo(click.style("Committed (not pushed).", fg="green"))
+        click.echo(click.style("Done (not pushed).", fg="green"))
     os.chdir("..")  # Return to previous directory
 
 

@@ -11,7 +11,7 @@ parent: {parent}
 ---
 # {name}
 
-[< {parent_title}]({parent})
+{parent_link}
 
 ## Description
 

@@ -164,7 +164,7 @@ tags: [coding, urgent]
 | `cor expand <task>` | Expand task checklist into individual subtasks |
 | `cor edit <name>` | Open existing file in editor (use `-a` to include archived) |
 | `cor mark <name> <status>` | Change task status (todo, active, blocked, done, dropped) |
-| `cor sync` | Pull, commit all changes, and push to remote (`--no-pull`, `--autostash`) |
+| `cor sync` | Commit all changes, pull, and push to remote (`--no-pull`, `--no-push`) |
 | `cor daily [tag]` | Show today's tasks; when `tag` is provided, only tasks matching the tag (by project name, task tags, or project tags) |
 | `cor weekly` | Show this week's summary |
 | `cor projects` | List active projects with status and last activity (from children) |
@@ -238,18 +238,17 @@ cor search "TODO" --no-context
 When working across multiple machines, sync conflicts can occur:
 
 ```bash
-# Normal sync (pull → commit → push)
+# Normal sync (commit → pull → push)
 cor sync
 
-# Skip pull (commit local changes only)
+# Skip pull (commit + push only)
 cor sync --no-pull
-
-# Auto-stash local changes, pull, then restore
-cor sync --autostash
 
 # Commit only, don't push
 cor sync --no-push
 ```
+
+If the pull produces a merge conflict, `cor sync` exits with the list of conflicting files. Resolve them, run `git add <files>` and `git commit`, then re-run `cor sync`.
 
 ### Natural Language Dates and Tags
 

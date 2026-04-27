@@ -56,15 +56,40 @@ def save_config(config: dict) -> None:
     os.chmod(cfg_file, 0o600)
 
 
-def get_vault_path() -> Path:
-    """Get vault path from config file.
+def _find_vault_from_cwd() -> Path | None:
+    """Walk up from cwd looking for a directory containing root.md."""
+    current = Path.cwd()
+    for ancestor in [current, *current.parents]:
+        if (ancestor / "root.md").exists():
+            return ancestor
+    return None
 
-    Raises ConfigError if not configured.
+
+def get_vault_path() -> Path:
+    """Resolve vault path with this precedence:
+    1. Nearest ancestor of cwd containing root.md (vault marker).
+    2. COR_VAULT environment variable.
+    3. `vault` key in ~/.config/cor/config.yaml.
+
+    Enables multiple vaults on one machine: cd into a vault and `cor`
+    operates on it. The config-file value remains the fallback when
+    neither cwd nor env points at a vault.
+
+    Raises ConfigError if none of the above resolves.
     """
+    discovered = _find_vault_from_cwd()
+    if discovered is not None:
+        return discovered
+
+    env_vault = os.environ.get("COR_VAULT")
+    if env_vault:
+        return Path(env_vault)
+
     config = load_config()
     if "vault" not in config or not config["vault"]:
         raise ConfigError(
-            "Vault path not configured. Run 'cor config set vault /path/to/notes' first."
+            "Vault path not configured. Run 'cor init' from a vault directory, "
+            "set COR_VAULT, or run 'cor config set vault /path/to/notes'."
         )
     return Path(config["vault"])
 

@@ -11,7 +11,7 @@ import frontmatter
 
 from . import cli
 from ..exceptions import ValidationError, NotFoundError, AlreadyExistsError
-from ..schema import VALID_TASK_STATUS, STATUS_SYMBOLS, DATE_TIME
+from ..schema import VALID_TASK_STATUS, VALID_PROJECT_STATUS, STATUS_SYMBOLS, DATE_TIME
 from ..config import get_focused_project
 from ..core.notes import parse_metadata
 from ..sync import MaintenanceRunner
@@ -443,15 +443,15 @@ def delete(archived: bool, name: str):
 @click.argument("text", nargs=-1, type=str)
 @require_init
 def mark(archived: bool, status_option: str | None, name: str, status: str | None, text: tuple[str, ...]):
-    """Update task status.
+    """Update task or project status.
 
-    Supports fuzzy matching for task names and glob patterns for bulk updates.
-    
+    Supports fuzzy matching for task/project names and glob patterns for bulk updates.
+
     You can also set due dates using natural language (e.g., "due tomorrow",
     "due next friday"). Tags can be added with "tag <name>".
 
     \b
-    Status values:
+    Task status values:
       todo       Ready to start
       active     Currently working on
       done       Completed
@@ -460,9 +460,17 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
       dropped    Abandoned/won't do
 
     \b
+    Project status values:
+      planning   Not started
+      active     In progress
+      paused     On hold
+      done       Completed (prompts to drop unfinished tasks)
+
+    \b
     Examples:
       cor mark impl active                    # Fuzzy matches 'implement-api'
       cor mark my-project.research done       # Specific task
+      cor mark myproject done                 # Mark project done (drops unfinished tasks)
       cor mark -a old-task todo               # Search archived tasks too
       cor mark "project.*" done               # Bulk: mark all project tasks done
       cor mark -s done "project.*"            # Alternative: --status before pattern
@@ -470,25 +478,25 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
       cor mark mytask active due tomorrow     # Set status and due date
       cor mark mytask todo due next friday tag urgent
     """
-    from fnmatch import fnmatch
-    from ..utils import is_glob_pattern, expand_glob_to_stems
+    from ..utils import is_glob_pattern
 
     notes_dir = get_notes_dir()
 
     # Determine the actual status value (from --status option or positional arg)
     actual_status = status_option or status
-    
-    # Handle case where name might be the pattern and status is in the option
+
     if actual_status is None:
         raise ValidationError(
             "Status is required. Usage: cor mark <task> <status> or cor mark -s <status> <task>"
         )
-    
-    # Validate status
-    if actual_status not in VALID_TASK_STATUS:
+
+    # Validate against union of task + project statuses upfront
+    all_valid = VALID_TASK_STATUS | VALID_PROJECT_STATUS
+    if actual_status not in all_valid:
         raise ValidationError(
             f"Invalid status '{actual_status}'. "
-            f"Valid: {', '.join(sorted(VALID_TASK_STATUS))}"
+            f"Task: {', '.join(sorted(VALID_TASK_STATUS))}. "
+            f"Project: {', '.join(sorted(VALID_PROJECT_STATUS))}"
         )
 
     # Handle archive/ prefix from tab completion
@@ -498,13 +506,13 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
 
     # Check if name is a glob pattern
     if is_glob_pattern(name):
-        # Bulk operation using glob pattern
+        # Bulk operation using glob pattern (tasks only)
         _mark_bulk(name, actual_status, text, notes_dir, archived)
         return
 
-    # Single file operation with fuzzy matching
+    # Single file operation with fuzzy matching (tasks and projects)
     focused = get_focused_project()
-    result = resolve_task_fuzzy(name, include_archived=archived, focused_project=focused)
+    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
 
     if result is None:
         return  # User cancelled
@@ -512,19 +520,76 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
     stem, is_archived = result
     file_path = get_file_path(stem, is_archived)
 
-    # Validate it's a task (metadata only - faster)
     note = parse_metadata(file_path)
 
     if not note:
         raise NotFoundError(f"Could not parse file: {file_path}")
 
-    if note.note_type != "task":
+    if note.note_type == "note":
+        raise ValidationError(f"'{stem}' is a note. This command only works with tasks and projects.")
+
+    if note.note_type == "project":
+        _update_project_status(file_path, note, actual_status, notes_dir)
+        return
+
+    # Task path
+    if actual_status not in VALID_TASK_STATUS:
         raise ValidationError(
-            f"'{stem}' is a {note.note_type}, not a task. "
-            "This command only works with tasks."
+            f"Invalid task status '{actual_status}'. "
+            f"Valid: {', '.join(sorted(VALID_TASK_STATUS))}"
+        )
+    _update_task_status(file_path, note, actual_status, text, notes_dir)
+
+
+def _update_project_status(file_path: Path, note, status: str, notes_dir: Path):
+    """Update project status, prompting to drop unfinished tasks when marking done."""
+    if status not in VALID_PROJECT_STATUS:
+        raise ValidationError(
+            f"Invalid project status '{status}'. "
+            f"Valid: {', '.join(sorted(VALID_PROJECT_STATUS))}"
         )
 
-    _update_task_status(file_path, note, actual_status, text, notes_dir)
+    dropped_task_paths: list[str] = []
+    if status == "done":
+        runner = MaintenanceRunner(notes_dir)
+        incomplete = runner.get_incomplete_tasks(note.path.stem)
+        if incomplete:
+            click.echo(click.style(f"Project has {len(incomplete)} unfinished task(s):", fg="yellow"))
+            for t in incomplete:
+                click.echo(f"  - {t}")
+            if not click.confirm("Drop all unfinished tasks?", default=False):
+                raise click.Abort()
+            # Drop all incomplete tasks
+            for task_filename in incomplete:
+                task_path = notes_dir / task_filename
+                if not task_path.exists():
+                    task_path = notes_dir / "archive" / task_filename
+                if task_path.exists():
+                    post = frontmatter.load(task_path)
+                    post["status"] = "dropped"
+                    with open(task_path, "wb") as f:
+                        frontmatter.dump(post, f, sort_keys=False)
+                    dropped_task_paths.append(str(task_path))
+
+    post = frontmatter.load(file_path)
+    if "status" not in post.metadata:
+        raise ValidationError("Could not find status field in frontmatter")
+    old_status = post.get("status", "none")
+    post["status"] = status
+    with open(file_path, "wb") as f:
+        frontmatter.dump(post, f, sort_keys=False)
+
+    runner = MaintenanceRunner(notes_dir)
+    # Pass dropped tasks first so they archive before the project file does;
+    # otherwise the project moves to archive/ while children stay in notes/
+    # with broken backlinks.
+    runner.sync(dropped_task_paths + [str(file_path)])
+
+    color = {"done": "green", "active": "cyan", "paused": "yellow", "planning": "blue"}.get(status, "white")
+    click.echo(
+        f"{click.style(format_title(note.path.stem), bold=True)}: "
+        f"{click.style(old_status, fg='white')} → {click.style(status, fg=color)}"
+    )
 
 
 def _mark_bulk(pattern: str, status: str, text: tuple[str, ...], notes_dir: Path, include_archive: bool):
