@@ -465,20 +465,19 @@ _TIME_PATTERN = re.compile(
 )
 
 
+_RELATIVE_TIME_PATTERN = re.compile(
+    r'\bin\s+\d+\s*(h\b|hours?\b|min\b|minutes?\b|sec\b|seconds?\b)',
+    re.IGNORECASE,
+)
+
+
 def _extract_explicit_time(date_text: str) -> tuple[int, int] | None:
     """Extract explicit time from text like '20pm', '20h', '8pm', '14:30'.
-    
-    Handles edge cases where users mix 24-hour format with am/pm (e.g., '20pm')
-    or use 'h' suffix (e.g., '20h'). Returns None if no valid time found.
-    
-    Skips relative time patterns like 'in 5h' which mean '5 hours from now'.
-    
-    Args:
-        date_text: The date text to extract time from
-        
-    Returns:
-        Tuple of (hour, minute) or None if no valid time found
-        
+
+    Requires a suffix (am/pm/h) or an explicit minute (HH:MM) so that bare
+    digits inside date-only strings (e.g. the '02' in '2026-02-15') are not
+    mistaken for an hour. Returns None when no recognisable time is present.
+
     Examples:
         >>> _extract_explicit_time('friday 20pm')
         (20, 0)
@@ -490,74 +489,75 @@ def _extract_explicit_time(date_text: str) -> tuple[int, int] | None:
         (20, 0)
         >>> _extract_explicit_time('in 5h')  # relative time, skip
         None
+        >>> _extract_explicit_time('2026-02-15')  # date only, no time
+        None
     """
-    date_lower = date_text.lower()
-    
-    # Skip relative time patterns like "in 5h" (meaning "in 5 hours")
-    # These should be handled by dateparser's parse() function
-    if re.search(r'\bin\s+\d{1,2}h\b', date_lower):
+    # Skip relative time patterns like "in 5h" (handled by dateparser.parse).
+    if _RELATIVE_TIME_PATTERN.search(date_text):
         return None
-    
-    matches = _TIME_PATTERN.findall(date_text)
-    
-    for hour_str, minute_str, suffix in matches:
+
+    for hour_str, minute_str, suffix in _TIME_PATTERN.findall(date_text):
         hour = int(hour_str)
         minute = int(minute_str) if minute_str else 0
         suffix_lower = suffix.lower() if suffix else ''
-        
-        # Skip if hour is out of valid range
+
         if hour < 1 or hour > 24:
             continue
-            
-        # Handle am/pm suffix
+
+        # Require a clear time marker: an am/pm/h suffix or explicit minutes.
+        # Otherwise bare digits (e.g. day numbers in '2026-02-15') would match.
+        if not suffix_lower and not minute_str:
+            continue
+
         if suffix_lower in ('pm', 'am'):
-            # Handle edge case: user wrote "20pm" (24h + pm suffix)
-            # We interpret this as 20:00 (8pm) - the pm is redundant but clear
             if hour > 12:
-                # Already 24-hour format, pm is redundant, use hour as-is
-                pass
+                pass  # "20pm" → keep 20, the pm is redundant
             elif suffix_lower == 'pm' and hour != 12:
                 hour += 12
             elif suffix_lower == 'am' and hour == 12:
                 hour = 0
-        
-        # 'h' suffix is just a marker (e.g., "20h" = 20:00)
-        # No adjustment needed for 'h' suffix
-        
-        # Cap at 23:59
+
         if hour > 23:
             hour = 23
-            
+
         return (hour, minute)
-    
+
     return None
 
 
+# Default deadline time when the user names only a day (today, tomorrow,
+# friday, 2026-02-15…) without specifying a time — end of the working day in
+# the user's local timezone.
+DEFAULT_DEADLINE_HOUR = 19
+
+
 def _apply_time_keyword(date_text: str, parsed_date: datetime) -> datetime:
-    """Apply time from keywords (morning, afternoon, etc.) or explicit time to a parsed date.
-    
-    Args:
-        date_text: Original date text that was parsed
-        parsed_date: The datetime returned by dateparser
-        
-    Returns:
-        Datetime with time adjusted if a keyword or explicit time was found, otherwise original
+    """Apply explicit time, time keyword, or default to end of workday.
+
+    Priority order:
+      1. Explicit time in the text (e.g. "8pm", "14:30", "20h").
+      2. Time keyword (morning, noon, afternoon, evening, night).
+      3. Relative time (e.g. "in 5h") — keep whatever dateparser computed.
+      4. Otherwise the user gave a pure day reference, so set the deadline to
+         DEFAULT_DEADLINE_HOUR:00 local time.
     """
-    date_lower = date_text.lower()
-    
-    # First check for explicit time patterns (e.g., "20pm", "8pm", "14:30")
     explicit_time = _extract_explicit_time(date_text)
     if explicit_time:
         hour, minute = explicit_time
         return parsed_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    
-    # Then check for time keywords
+
+    date_lower = date_text.lower()
     for keyword, (hour, minute) in _TIME_KEYWORDS.items():
         # Use word boundary to avoid matching "noon" inside "afternoon"
         if re.search(r'\b' + keyword + r'\b', date_lower):
             return parsed_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    
-    return parsed_date
+
+    if _RELATIVE_TIME_PATTERN.search(date_text):
+        return parsed_date
+
+    return parsed_date.replace(
+        hour=DEFAULT_DEADLINE_HOUR, minute=0, second=0, microsecond=0
+    )
 
 
 def parse_natural_language_text(text: str) -> tuple[str, datetime | None, list[str], str | None, str | None]:
@@ -617,7 +617,9 @@ def parse_natural_language_text(text: str) -> tuple[str, datetime | None, list[s
     due_match = re.search(due_pattern, cleaned_text, re.IGNORECASE)
     
     if due_match:
-        due_text = due_match.group(1).strip()
+        raw_due_text = due_match.group(1)
+        due_text = raw_due_text.strip()
+        matched_date_str: str | None = None
         # Parse the date using dateparser's search_dates which is better at finding dates
         result = search_dates(
             due_text,
@@ -629,7 +631,7 @@ def parse_natural_language_text(text: str) -> tuple[str, datetime | None, list[s
         if result:
             # search_dates returns a list of tuples (date_string, datetime)
             # Take the first match
-            due_date = result[0][1]
+            matched_date_str, due_date = result[0]
         else:
             # Fallback to parse for patterns search_dates misses (e.g., "in 5h")
             due_date = parse_date(
@@ -639,13 +641,30 @@ def parse_natural_language_text(text: str) -> tuple[str, datetime | None, list[s
                     'RETURN_AS_TIMEZONE_AWARE': False,
                 }
             )
-        
+
         if due_date:
             # Apply time keywords (morning, afternoon, etc.) if present
             due_date = _apply_time_keyword(due_text, due_date)
-            # Remove the entire due specification from text
-            cleaned_text = cleaned_text[:due_match.start()] + cleaned_text[due_match.end():]
-            cleaned_text = cleaned_text.strip()
+            # Remove only "due <date>" from the text, preserving any trailing
+            # description (e.g. "due tomorrow this is a text" → "this is a text").
+            removal_end = due_match.end()
+            if matched_date_str:
+                pos = raw_due_text.lower().find(matched_date_str.lower())
+                if pos >= 0:
+                    removal_end = due_match.start(1) + pos + len(matched_date_str)
+                    # Swallow a trailing time keyword or explicit-time suffix
+                    # that search_dates didn't include in its match — otherwise
+                    # "due tomorrow morning" would leave "morning" in the text.
+                    tail = cleaned_text[removal_end:]
+                    keyword_re = r'\s+(?:' + '|'.join(_TIME_KEYWORDS) + r')\b'
+                    explicit_re = r'\s+\d{1,2}(?::\d{2}|(?:pm|am|h)\b)'
+                    tail_match = re.match(
+                        keyword_re + r'|' + explicit_re, tail, re.IGNORECASE
+                    )
+                    if tail_match:
+                        removal_end += tail_match.end()
+            cleaned_text = cleaned_text[:due_match.start()] + cleaned_text[removal_end:]
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     
     # Pattern to match "tag <tag1> <tag2> ..." or "tag: <tag1> <tag2> ..."
     # Regex explanation:
