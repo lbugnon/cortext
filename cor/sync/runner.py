@@ -565,51 +565,92 @@ class MaintenanceRunner:
         return unarchived, updated_parents
 
     def archive_completed(self, staged_files: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
-        """Move completed projects/tasks to archive."""
+        """Move completed projects/tasks to archive.
+        """
         archived = []
         updated_parents = []
 
-        for filepath in staged_files:
-            path = Path(filepath)
+        # Build the work set: original staged files + cascaded descendants.
+        # Cascaded files are force-archived even if `should_archive` says no
+        # (notes never satisfy it).
+        to_archive: list[str] = []
+        cascaded: set[str] = set()
+        seen: set[str] = set()
 
-            # Skip files already in archive directory or templates
+        def _queue(fp: str):
+            if fp not in seen:
+                seen.add(fp)
+                to_archive.append(fp)
+
+        for filepath in staged_files:
+            _queue(filepath)
+
+            path = Path(filepath)
             if self.archive_mgr.is_in_archive(filepath) or "templates" in filepath:
                 continue
+            if path.name in ("root.md", "backlog.md"):
+                continue
+            actual_path = path if path.is_absolute() else self.notes_dir / path.name
+            if not actual_path.exists():
+                continue
+            meta = get_frontmatter(str(actual_path))
+            if not meta or not should_archive(str(actual_path), meta):
+                continue
+            if meta.get("type") not in ("project", "task"):
+                continue
 
-            # Skip special files
+            # Glob matches descendants at any depth (parent.*.md → parent.x.md,
+            # parent.x.y.md, ...). One pass catches the whole subtree.
+            for child_path in self.notes_dir.glob(f"{path.stem}.*.md"):
+                child_str = str(child_path)
+                if child_str in seen:
+                    continue
+                child_meta = get_frontmatter(child_str)
+                if not child_meta:
+                    continue
+                ctype = child_meta.get("type")
+                cstatus = child_meta.get("status")
+                if ctype == "note" or (ctype == "task" and cstatus in ("done", "dropped")):
+                    _queue(child_str)
+                    cascaded.add(child_str)
+
+        # Deepest-first: children move before their parent, so update_links_in_file
+        # sees the parent still in notes/ and adds `../` prefix — which the parent's
+        # later update_links_in_children call rewrites back to a sibling reference.
+        to_archive.sort(key=lambda fp: -Path(fp).stem.count("."))
+
+        for filepath in to_archive:
+            path = Path(filepath)
+
+            if self.archive_mgr.is_in_archive(filepath) or "templates" in filepath:
+                continue
             if path.name in ("root.md", "backlog.md"):
                 continue
 
-            # Resolve the actual file path if relative
-            actual_path = path
-            if not path.is_absolute():
-                actual_path = self.notes_dir / path.name
+            actual_path = path if path.is_absolute() else self.notes_dir / path.name
+            if not actual_path.exists():
+                continue
 
             meta = get_frontmatter(str(actual_path))
             if not meta:
                 continue
 
-            if should_archive(str(actual_path), meta):
-                new_path = self.archive_dir / path.name
+            if not (filepath in cascaded or should_archive(str(actual_path), meta)):
+                continue
 
-                if not self.dry_run:
-                    self.archive_dir.mkdir(exist_ok=True)
-                    # Move file
-                    shutil.move(str(actual_path), new_path)
+            new_path = self.archive_dir / path.name
 
-                    # Update links inside the archived file (add ../ prefix)
-                    self.update_links_in_file(new_path, to_archive=True)
+            if not self.dry_run:
+                self.archive_dir.mkdir(exist_ok=True)
+                shutil.move(str(actual_path), new_path)
+                self.update_links_in_file(new_path, to_archive=True)
 
-                # Return original filepath for consistency
-                archived.append((filepath, str(new_path)))
+            archived.append((filepath, str(new_path)))
 
-                if not self.dry_run:
-                    # Update links in parent file
-                    task_filename = path.stem
-                    updated_parents.extend(self.update_links_in_parent(task_filename, to_archive=True))
-
-                    # Update links in children files
-                    updated_parents.extend(self.update_links_in_children(task_filename, to_archive=True))
+            if not self.dry_run:
+                task_filename = path.stem
+                updated_parents.extend(self.update_links_in_parent(task_filename, to_archive=True))
+                updated_parents.extend(self.update_links_in_children(task_filename, to_archive=True))
 
         return archived, updated_parents
 
