@@ -59,16 +59,17 @@ def get_templates_dir() -> Path:
 
 
 def get_projects() -> list[str]:
-    """Get list of project names (files without dots in stem)."""
+    """Get list of project names (no dots in stem, ``type`` is not ``note``).
+
+    A top-level note (``theme.md`` with ``type: note``) is structurally like a
+    project but represents knowledge rather than tracked work, so it is
+    excluded. Files without a parseable type are treated as projects.
+    """
+    from .core.files import FileIterator
     notes_dir = get_notes_dir()
     if not notes_dir.exists():
         return []
-    projects = []
-    for p in notes_dir.glob("*.md"):
-        # Projects have no dots in stem and aren't special files
-        if "." not in p.stem and p.stem not in ("root", "backlog"):
-            projects.append(p.stem)
-    return sorted(projects)
+    return FileIterator(notes_dir).get_project_stems()
 
 
 def get_task_groups(project: str) -> list[str]:

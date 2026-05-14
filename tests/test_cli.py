@@ -174,6 +174,57 @@ class TestNew:
         content = (initialized_vault / "myproj.meeting.md").read_text()
         assert "type: note" in content, "Note should have type: note"
 
+    def test_new_note_auto_creates_top_level_parent(self, runner, initialized_vault, monkeypatch):
+        """cor new note theme.note1 should auto-create theme.md as a note when missing."""
+        monkeypatch.chdir(initialized_vault)
+
+        result = runner.invoke(cli, ["new", "note", "theme.note1", "child"])
+        assert result.exit_code == 0, f"New note failed: {result.output}"
+
+        parent_path = initialized_vault / "theme.md"
+        assert parent_path.exists(), "Top-level parent theme.md should be auto-created"
+        parent_content = parent_path.read_text()
+        assert "type: note" in parent_content, "Auto-created parent of a note must be type: note"
+
+    def test_new_note_auto_creates_hierarchy_of_notes(self, runner, initialized_vault, monkeypatch):
+        """cor new note theme.sub.note1 should create theme and theme.sub as notes."""
+        monkeypatch.chdir(initialized_vault)
+
+        result = runner.invoke(cli, ["new", "note", "theme.sub.note1", "deep"])
+        assert result.exit_code == 0, f"New note failed: {result.output}"
+
+        for stem in ("theme", "theme.sub", "theme.sub.note1"):
+            path = initialized_vault / f"{stem}.md"
+            assert path.exists(), f"{stem}.md should exist"
+        assert "type: note" in (initialized_vault / "theme.md").read_text()
+        assert "type: note" in (initialized_vault / "theme.sub.md").read_text()
+
+    def test_new_task_auto_creates_top_level_project(self, runner, initialized_vault, monkeypatch):
+        """cor new task missingproj.task1 should auto-create missingproj as a project."""
+        monkeypatch.chdir(initialized_vault)
+
+        result = runner.invoke(cli, ["new", "task", "missingproj.task1", "work"])
+        assert result.exit_code == 0, f"New task failed: {result.output}"
+
+        parent_path = initialized_vault / "missingproj.md"
+        assert parent_path.exists(), "Top-level project should be auto-created for a task"
+        parent_content = parent_path.read_text()
+        assert "type: project" in parent_content, "Auto-created parent of a task must be type: project"
+        # Task should be linked in the project's Tasks section
+        assert "(missingproj.task1.md)" in parent_content
+
+    def test_top_level_note_excluded_from_projects(self, runner, initialized_vault, monkeypatch):
+        """A top-level note must not show up in `cor projects` listings."""
+        monkeypatch.chdir(initialized_vault)
+
+        runner.invoke(cli, ["new", "project", "realproj", "--no-edit"])
+        runner.invoke(cli, ["new", "note", "knowledge.fact", "child"])  # creates knowledge.md as note
+
+        from cor.utils import get_projects
+        projects = get_projects()
+        assert "realproj" in projects
+        assert "knowledge" not in projects, "Top-level note must not be reported as a project"
+
     def test_expand_parses_checklist(self, runner, initialized_vault, monkeypatch):
         """cor expand should parse checklist from task file."""
         monkeypatch.chdir(initialized_vault)

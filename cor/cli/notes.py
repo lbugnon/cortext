@@ -33,6 +33,80 @@ from ..completions import complete_name, complete_task_name, complete_task_statu
 from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy
 
 
+def _template_for_level(child_type: str, level_index: int) -> str:
+    """Return the template type for an auto-created parent at the given level.
+
+    Tasks live under projects, so a missing top-level (level_index == 0) parent
+    for a task becomes a project; deeper levels become task groups. Notes nest
+    freely under notes at every level.
+    """
+    if child_type == "note":
+        return "note"
+    return "project" if level_index == 0 else "task"
+
+
+def _ensure_parents_exist(notes_dir: Path, parent_parts: list[str], child_type: str) -> None:
+    """Create any missing parent files in a hierarchy.
+
+    For ``project.group.leaf`` with child_type ``task``, ensures ``project.md``
+    (as project) and ``project.group.md`` (as task group) exist. Unarchives
+    parents that are present only in archive/. For task children, also links
+    each newly created intermediate level into its own parent's Tasks section.
+    """
+    archive_dir = notes_dir / "archive"
+
+    for i, level_name in enumerate(parent_parts):
+        level_stem = ".".join(parent_parts[: i + 1])
+        level_path = notes_dir / f"{level_stem}.md"
+        archived_path = archive_dir / f"{level_stem}.md"
+
+        if archived_path.exists() and not level_path.exists():
+            shutil.move(str(archived_path), level_path)
+            post = frontmatter.load(level_path)
+            old_status = post.get("status")
+            if old_status in ("done", "dropped"):
+                post["status"] = "todo"
+                with open(level_path, "wb") as f:
+                    frontmatter.dump(post, f, sort_keys=False)
+                click.echo(f"Unarchived {level_stem} ({old_status} → todo)")
+            else:
+                click.echo(f"Unarchived {level_stem}")
+
+            if i > 0:
+                grandparent_stem = ".".join(parent_parts[:i])
+                grandparent_path = notes_dir / f"{grandparent_stem}.md"
+                if grandparent_path.exists():
+                    content = grandparent_path.read_text()
+                    pattern = rf'(\[[^\]]+\]\()archive/{re.escape(level_stem)}\.md(\))'
+                    new_content = re.sub(pattern, rf'\g<1>{level_stem}.md\g<2>', content)
+                    if new_content != content:
+                        grandparent_path.write_text(new_content)
+
+        if level_path.exists():
+            continue
+
+        level_type = _template_for_level(child_type, i)
+        level_template = get_template(level_type)
+        if i > 0:
+            level_parent = ".".join(parent_parts[:i])
+            level_parent_title = format_title(parent_parts[i - 1])
+        else:
+            level_parent = None
+            level_parent_title = None
+
+        level_content = render_template(
+            level_template, level_name, level_parent, level_parent_title
+        )
+        level_path.write_text(level_content)
+        click.echo(f"Created {level_path}")
+
+        # Tasks index themselves in their parent's Tasks section; notes don't.
+        if i > 0 and child_type == "task":
+            parent_path = notes_dir / f"{level_parent}.md"
+            add_task_to_project(parent_path, level_name, level_stem)
+            click.echo(f"Added to {parent_path}")
+
+
 @cli.command()
 @click.argument("note_type", type=click.Choice(["project", "task", "note"]))
 @click.argument("name", shell_complete=complete_name)
@@ -149,77 +223,27 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
     filepath.write_text(content)
     log_info(f"Created {note_type} at {filepath}")
 
-    # Handle task group hierarchy - auto-create missing parent groups
-    if note_type == "task" and parent_hierarchy:
-        # For hierarchy like project.group.smaller_group.task, we need to ensure:
-        # 1. project.group exists
-        # 2. project.group.smaller_group exists
-        # 3. Add task to the immediate parent
-        
-        # Split parent hierarchy into parts
-        parent_parts = parent_hierarchy.split(".")
-        
-        # Create all missing parent groups in the hierarchy
-        for i in range(1, len(parent_parts)):
-            # Build the group name at this level
-            group_stem = ".".join(parent_parts[:i+1])
-            group_path = notes_dir / f"{group_stem}.md"
-            archive_dir = notes_dir / "archive"
-            
-            # Check if group exists in archive (done/dropped) - unarchive it
-            archived_group_path = archive_dir / f"{group_stem}.md"
-            if archived_group_path.exists() and not group_path.exists():
-                # Move from archive back to notes
-                shutil.move(str(archived_group_path), group_path)
-                
-                # Update status to todo
-                post = frontmatter.load(group_path)
-                old_status = post.get('status', 'done')
-                post['status'] = 'todo'
-                with open(group_path, 'wb') as f:
-                    frontmatter.dump(post, f, sort_keys=False)
-                
-                click.echo(f"Unarchived {group_stem} ({old_status} → todo)")
-                
-                # Update link in parent file
-                parent_stem = ".".join(parent_parts[:i]) if i > 1 else parent_parts[0]
-                parent_path = notes_dir / f"{parent_stem}.md"
-                if parent_path.exists():
-                    content = parent_path.read_text()
-                    # Update link from archive/ to direct
-                    pattern = rf'(\[[^\]]+\]\()archive/{re.escape(group_stem)}\.md(\))'
-                    replacement = rf'\g<1>{group_stem}.md\g<2>'
-                    new_content = re.sub(pattern, replacement, content)
-                    if new_content != content:
-                        parent_path.write_text(new_content)
-            
-            # Create group file if it doesn't exist
-            if not group_path.exists():
-                group_template = get_template("task")
-                # Group's parent is the previous level in hierarchy
-                group_parent = ".".join(parent_parts[:i]) if i > 1 else parent_parts[0]
-                group_name = parent_parts[i]
-                group_content = render_template(group_template, group_name, group_parent, format_title(group_parent.split(".")[-1]))
-                group_path.write_text(group_content)
-                click.echo(f"Created {group_path}")
-                
-                # Add group to its parent's Tasks section
-                parent_path = notes_dir / f"{group_parent}.md"
-                add_task_to_project(parent_path, group_name, group_stem)
-                click.echo(f"Added to {parent_path}")
-        
-        # Add task to the immediate parent's Tasks section
-        immediate_parent_path = notes_dir / f"{parent_hierarchy}.md"
-        task_filename = filepath.stem
-        add_task_to_project(immediate_parent_path, task_name, task_filename)
-        click.echo(f"Added to {immediate_parent_path}")
+    # Auto-create any missing parents so the parent_link in the child resolves.
+    # Tasks get a project at the top and task groups in between; notes get notes
+    # at every level (a top-level note like `theme.md` is valid knowledge).
+    if note_type in ("task", "note"):
+        if parent_hierarchy:
+            parent_parts = parent_hierarchy.split(".")
+        elif project:
+            parent_parts = [project]
+        else:
+            parent_parts = []
 
-    # Add task directly to project (no group)
-    elif note_type == "task" and project:
-        project_path = notes_dir / f"{project}.md"
-        task_filename = filepath.stem
-        add_task_to_project(project_path, task_name, task_filename)
-        click.echo(f"Added to {project_path}")
+        _ensure_parents_exist(notes_dir, parent_parts, note_type)
+
+        # For tasks, link the new task into the immediate parent's Tasks list.
+        # Notes don't maintain a child-index in markdown; the child's `parent:`
+        # field and `[< Parent]` link are enough.
+        if note_type == "task" and parent_parts:
+            immediate_parent_stem = ".".join(parent_parts)
+            immediate_parent_path = notes_dir / f"{immediate_parent_stem}.md"
+            add_task_to_project(immediate_parent_path, task_name, filepath.stem)
+            click.echo(f"Added to {immediate_parent_path}")
     
     if text:
         text = " ".join(text)

@@ -9,6 +9,19 @@ from typing import Iterator
 import frontmatter
 
 
+def _is_top_level_note(path: Path) -> bool:
+    """Return True if ``path`` is a note file (``type: note``) at the top level.
+
+    Files without parseable frontmatter or without a type field are treated as
+    projects (back-compat with files predating the explicit type marker).
+    """
+    try:
+        post = frontmatter.load(path)
+    except Exception:
+        return False
+    return post.metadata.get("type") == "note"
+
+
 class FileIterator:
     """Consistent file iteration patterns for notes."""
 
@@ -53,6 +66,10 @@ class FileIterator:
     def iter_projects(self, include_archive: bool = False) -> Iterator[Path]:
         """Iterate project files (no dots in name).
 
+        Top-level notes (stem without dots but ``type: note`` in frontmatter)
+        are excluded — they look structurally like projects but represent
+        knowledge, not tracked work.
+
         Args:
             include_archive: If True, include archived projects
 
@@ -60,9 +77,11 @@ class FileIterator:
             Path objects for each project file
         """
         for path in self.iter_all_notes(include_archive=include_archive):
-            # Projects have no dots in stem
-            if "." not in path.stem:
-                yield path
+            if "." in path.stem:
+                continue
+            if _is_top_level_note(path):
+                continue
+            yield path
 
     def iter_tasks_for_project(self, project: str,
                                include_archive: bool = False,

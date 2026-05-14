@@ -211,23 +211,34 @@ def focus(project: str | None):
     
     # Validate project exists
     from ..search import resolve_file_fuzzy
-    
-    # Try to find the project (projects have no dots in name)
+    import frontmatter
+
     project_path = notes_dir / f"{project}.md"
     if not project_path.exists():
-        # Try fuzzy matching
         result = resolve_file_fuzzy(project, include_archived=False)
         if result is None:
             raise NotFoundError(f"Project not found: {project}")
         stem, _ = result
-        # Check it's actually a project (no dots)
         if "." in stem:
             raise ValidationError(
                 f"'{stem}' is not a project. Can only focus on top-level projects."
             )
         project = stem
-    
-    # Set focus
+        project_path = notes_dir / f"{project}.md"
+
+    # Reject top-level notes — focus is for filtering work under a project.
+    try:
+        post = frontmatter.load(project_path)
+        if post.metadata.get("type") == "note":
+            raise ValidationError(
+                f"'{project}' is a top-level note, not a project. "
+                "Focus only works with projects."
+            )
+    except ValidationError:
+        raise
+    except Exception:
+        pass
+
     set_focused_project(project)
     click.echo(click.style(f"Focusing on: {project}", fg="green", bold=True))
     click.echo("Commands like 'cor new', 'cor edit' will default to this project.")
