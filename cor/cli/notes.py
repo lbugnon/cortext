@@ -422,6 +422,75 @@ def tag(archived: bool, delete_tags: bool, name: str, tags: tuple[str, ...]):
     log_info(summary)
 
 
+@cli.command()
+@click.option("--archived", "-a", is_flag=True, help="Include archived files in search")
+@click.option("--delete", "-d", "delete_due", is_flag=True, help="Remove the due date instead of setting one")
+@click.argument("name", shell_complete=complete_task_name)
+@click.argument("text", nargs=-1, type=str)
+@require_init
+def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
+    """Set or remove a task's due date using natural language.
+
+    Uses the same fuzzy search as `cor edit`.
+
+    \b
+    Examples:
+      cor due task1 tomorrow
+      cor due task1 next friday 9am
+      cor due task1 in 3 days
+      cor due -d task1                  # Remove the due date
+    """
+    if not delete_due and not text:
+        raise ValidationError("Provide a date (e.g. 'tomorrow') or use -d to clear the due date.")
+
+    if name.startswith("archive/"):
+        name = name[8:]
+        archived = True
+
+    focused = get_focused_project()
+    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
+    if result is None:
+        return
+
+    stem, is_archived = result
+    file_path = get_file_path(stem, is_archived)
+
+    post = frontmatter.load(file_path)
+
+    if delete_due:
+        if "due" not in post.metadata:
+            log_info(f"{stem} has no due date.")
+            return
+        old_due = post.metadata.pop("due")
+        post["modified"] = datetime.now().strftime(DATE_TIME)
+        with open(file_path, "wb") as f:
+            frontmatter.dump(post, f, sort_keys=False)
+        runner = MaintenanceRunner(get_notes_dir())
+        runner.sync([str(file_path)])
+        log_info(f"Cleared due date on {stem} (was {old_due}).")
+        return
+
+    text_str = " ".join(text)
+    _, due_date, _, _, _ = parse_natural_language_text(f"due {text_str}")
+    if due_date is None:
+        raise ValidationError(f"Could not parse date: '{text_str}'")
+
+    old_due = post.metadata.get("due")
+    post["due"] = due_date.strftime(DATE_TIME)
+    post["modified"] = datetime.now().strftime(DATE_TIME)
+    with open(file_path, "wb") as f:
+        frontmatter.dump(post, f, sort_keys=False)
+
+    runner = MaintenanceRunner(notes_dir=get_notes_dir())
+    runner.sync([str(file_path)])
+
+    new_due = due_date.strftime(DATE_TIME)
+    if old_due:
+        log_info(f"{stem}: due {old_due} → {new_due}")
+    else:
+        log_info(f"{stem}: set due {new_due}")
+
+
 @cli.command(name="delete")
 @click.option("--archived", "-a", is_flag=True, help="Include archived files in search")
 @click.argument("name", shell_complete=complete_existing_name)
