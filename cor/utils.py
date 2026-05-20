@@ -21,7 +21,7 @@ def require_init(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         notes_dir = get_vault_path()
-        if not (notes_dir / "root.md").exists():
+        if not (notes_dir / "backlog.md").exists():
             raise NotInitializedError("Not initialized. Run 'cor init' first.")
         return f(*args, **kwargs)
     return wrapper
@@ -107,7 +107,7 @@ def get_all_notes() -> list[str]:
         return []
     notes = []
     for p in notes_dir.glob("*.md"):
-        if p.stem not in ("root", "backlog"):
+        if p.stem != "backlog":
             notes.append(p.stem)
     return sorted(notes)
 

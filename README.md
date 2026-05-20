@@ -106,7 +106,6 @@ cor sync
 | `project.group.smaller_group.task.md` | Task | Deeply nested task (supports any depth) |
 | `project.note.md` | Note | Reference/thinking, not actionable |
 | `backlog.md` | Backlog | Unsorted inbox for capture |
-| `root.md` | Root | Dashboard/digest of current state |
 
 ## Metadata Reference
 
@@ -551,8 +550,7 @@ your-vault/                 # Your notes directory
 ├── .git/                   # Git repository (auto-initialized by cor init)
 │   └── hooks/
 │       └── pre-commit      # Auto-maintenance hook
-├── root.md                 # Dashboard/digest of current state
-├── backlog.md              # Unsorted inbox for capture
+├── backlog.md              # Unsorted inbox for capture (vault marker)
 ├── archive/                # Completed/archived items
 │   ├── old-project.md
 │   ├── project.old-task.md
@@ -589,8 +587,7 @@ cor/                        # Repository root
 │       ├── project.md
 │       ├── task.md
 │       ├── note.md
-│       ├── backlog.md
-│       └── root.md
+│       └── backlog.md
 ├── tests/                  # Test suite
 │   ├── conftest.py         # Test configuration
 │   ├── test_cli.py         # CLI command tests

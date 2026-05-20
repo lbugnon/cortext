@@ -119,7 +119,7 @@ def infer_type(filepath: str, meta: dict | None) -> str:
 
     Priority:
     1. Explicit type in frontmatter
-    2. Special files (backlog, root)
+    2. Special files (backlog)
     3. Contains .task in filename -> task
     4. Contains .note in filename -> note
     5. Otherwise -> project
@@ -128,7 +128,7 @@ def infer_type(filepath: str, meta: dict | None) -> str:
         return meta.get("type")
 
     stem = Path(filepath).stem
-    if stem in ("backlog", "root"):
+    if stem == "backlog":
         return "special"
     if ".task" in stem:
         return "task"
@@ -588,7 +588,7 @@ class MaintenanceRunner:
             path = Path(filepath)
             if self.archive_mgr.is_in_archive(filepath) or "templates" in filepath:
                 continue
-            if path.name in ("root.md", "backlog.md"):
+            if path.name == "backlog.md":
                 continue
             actual_path = path if path.is_absolute() else self.notes_dir / path.name
             if not actual_path.exists():
@@ -624,7 +624,7 @@ class MaintenanceRunner:
 
             if self.archive_mgr.is_in_archive(filepath) or "templates" in filepath:
                 continue
-            if path.name in ("root.md", "backlog.md"):
+            if path.name == "backlog.md":
                 continue
 
             actual_path = path if path.is_absolute() else self.notes_dir / path.name

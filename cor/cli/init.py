@@ -121,12 +121,12 @@ def _setup_telegram():
 @click.option("--with-telegram", is_flag=True, default=False, help="Set up Telegram inbox integration")
 def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool):
     """Initialize a new Cor vault.
-    
-    Creates the vault structure (notes/, templates/, root.md, backlog.md).
+
+    Creates the vault structure (notes/, templates/, backlog.md).
     Initializes git repository if not already present.
     Installs git hooks and configures shell completion automatically.
     Sets this directory as your vault path in the global config.
-    
+
     Use --with-calendar to set up Google Calendar sync for due dates.
     Use --with-telegram to set up Telegram inbox for capturing notes.
     """
@@ -151,14 +151,6 @@ def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool):
     # Create directories
     notes_dir.mkdir(exist_ok=True)
     templates_dir.mkdir(exist_ok=True)
-
-    # Create root.md
-    root_path = notes_dir / "root.md"
-    if not root_path.exists():
-        root_template = (Path(__file__).parent.parent / "assets" / "root.md").read_text()
-        now = datetime.now().strftime(DATE_TIME)
-        root_path.write_text(root_template.format(date=now))
-        log_verbose(f"Created {root_path}")
 
     # Create backlog.md
     backlog_path = notes_dir / "backlog.md"
@@ -239,7 +231,7 @@ def example_vault(ctx):
     notes_dir = get_notes_dir()
     
     # Check if vault is initialized
-    if not (notes_dir / "root.md").exists():
+    if not (notes_dir / "backlog.md").exists():
         if click.confirm("Vault not initialized. Initialize now?", default=True):
             ctx.invoke(init, yes=True)
             # Re-fetch notes_dir after init sets the vault path
@@ -247,10 +239,10 @@ def example_vault(ctx):
         else:
             click.echo("Aborted.")
             return
-    
+
     # Check if vault has content
     existing_files = list(notes_dir.glob("*.md"))
-    if len(existing_files) > 2:  # More than root.md and backlog.md
+    if len(existing_files) > 1:  # More than backlog.md
         click.echo(f"Warning: Vault already contains {len(existing_files)} files.")
         if not click.confirm("Continue and add example content?", default=False):
             click.echo("Aborted.")

@@ -26,7 +26,7 @@ class ConfigError(CorError):
 
 
 class NotInitializedError(CorError):
-    """Vault not initialized (no root.md found)."""
+    """Vault not initialized (no backlog.md found)."""
     pass
 
 

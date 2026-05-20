@@ -27,15 +27,15 @@ def runner():
 @pytest.fixture
 def initialized_vault(temp_vault, runner):
     """Return a vault that has been initialized with cor init."""
-    # temp_vault already has templates and root.md from conftest
+    # temp_vault already has templates and backlog.md from conftest
     return temp_vault
 
 
 class TestInit:
     """Test cor init command."""
 
-    def test_init_creates_root_md(self, runner, tmp_path, monkeypatch):
-        """cor init should create root.md"""
+    def test_init_creates_backlog_md(self, runner, tmp_path, monkeypatch):
+        """cor init should create backlog.md"""
         monkeypatch.chdir(tmp_path)
 
         # Initialize git first
@@ -46,7 +46,7 @@ class TestInit:
 
         result = runner.invoke(cli, ["init", "--yes"])
         assert result.exit_code == 0, f"Init failed: {result.output}"
-        assert (tmp_path / "root.md").exists(), "root.md should be created"
+        assert (tmp_path / "backlog.md").exists(), "backlog.md should be created"
 
     def test_init_creates_templates(self, runner, tmp_path, monkeypatch):
         """cor init should create template files."""

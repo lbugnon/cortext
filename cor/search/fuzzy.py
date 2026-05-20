@@ -25,7 +25,7 @@ def get_all_file_stems(include_archived: bool = False) -> list[tuple[str, bool]]
 
     # Main directory files
     for path in notes_dir.glob("*.md"):
-        if path.stem not in ("root", "backlog"):
+        if path.stem != "backlog":
             results.append((path.stem, False))
 
     # Archived files
@@ -217,7 +217,7 @@ def get_task_file_stems(include_archived: bool = False) -> list[tuple[str, bool]
 
     # Main directory files
     for path in notes_dir.glob("*.md"):
-        if path.stem in ("root", "backlog"):
+        if path.stem == "backlog":
             continue
         note = parse_metadata(path)
         if note and note.note_type == "task":

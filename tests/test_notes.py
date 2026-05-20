@@ -293,10 +293,9 @@ class TestParseHelpers:
         assert all(isinstance(n, NoteMetadata) for n in notes)
         assert not any(isinstance(n, Note) for n in notes)
 
-    def test_find_notes_excludes_root_backlog(self, tmp_path):
-        """Test that find_notes excludes root.md and backlog.md."""
+    def test_find_notes_excludes_backlog(self, tmp_path):
+        """Test that find_notes excludes backlog.md."""
         (tmp_path / "task1.md").write_text("---\ntype: task\n---\n# Task 1")
-        (tmp_path / "root.md").write_text("---\ntype: note\n---\n# Root")
         (tmp_path / "backlog.md").write_text("---\ntype: note\n---\n# Backlog")
 
         notes = find_notes(tmp_path)
