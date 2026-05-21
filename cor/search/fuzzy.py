@@ -299,3 +299,68 @@ def resolve_task_fuzzy(
 
     # 5. Multiple matches or low confidence: show picker
     return show_picker(matches, name)
+
+
+def resolve_files(
+    name: str,
+    include_archived: bool = False,
+    focused_project: str | None = None,
+    note_type: str | None = None,
+) -> list[tuple[str, bool]]:
+    """Resolve a name to one or more files for bulk-capable commands.
+
+    If `name` is a glob pattern (contains *, ?, or []), expands it against the
+    notes directory, optionally filters by note_type, prints the matches, and
+    prompts the user for confirmation. Otherwise falls back to fuzzy single-file
+    resolution.
+
+    Glob patterns must be quoted by the user (e.g. cor tag "projects_*" tag1)
+    to prevent shell expansion.
+
+    Args:
+        name: Pattern or fuzzy name
+        include_archived: Include archive/ files
+        focused_project: Boost scores for matches in this project (single-file only)
+        note_type: If set ("task", "project", "note"), filter pattern matches
+
+    Returns:
+        List of (stem, is_archived). Empty list if user cancels or no matches.
+    """
+    from ..utils import is_glob_pattern, expand_glob_to_stems
+    from ..core.notes import parse_metadata
+
+    if not is_glob_pattern(name):
+        result = resolve_file_fuzzy(
+            name,
+            include_archived=include_archived,
+            focused_project=focused_project,
+        )
+        return [result] if result else []
+
+    matches = expand_glob_to_stems(name, get_notes_dir(), include_archived)
+
+    if note_type:
+        filtered = []
+        for stem, is_archived in matches:
+            file_path = get_file_path(stem, is_archived)
+            note = parse_metadata(file_path)
+            if note and note.note_type == note_type:
+                filtered.append((stem, is_archived))
+        matches = filtered
+
+    if not matches:
+        raise NotFoundError(f"No files match pattern: {name}")
+
+    click.echo(f"\n{len(matches)} file(s) match '{name}':")
+    for stem, is_archived in matches:
+        suffix = " (archived)" if is_archived else ""
+        click.echo(f"  - {stem}{suffix}")
+
+    if sys.stdin.isatty():
+        if not click.confirm("Apply to all?", default=False):
+            click.echo("Cancelled.")
+            return []
+    else:
+        click.echo("Non-interactive mode: proceeding.")
+
+    return matches

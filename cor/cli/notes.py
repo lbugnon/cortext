@@ -30,7 +30,7 @@ from ..utils import (
     title_to_stem,
 )
 from ..completions import complete_name, complete_task_name, complete_task_status, complete_existing_name
-from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy
+from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy, resolve_files
 
 
 def _template_for_level(child_type: str, level_index: int) -> str:
@@ -358,13 +358,15 @@ def edit(archived: bool, name: str):
 @click.argument("tags", nargs=-1)
 @require_init
 def tag(archived: bool, delete_tags: bool, name: str, tags: tuple[str, ...]):
-    """Add or remove tags on a note.
+    """Add or remove tags on one or more notes.
 
-    Uses the same fuzzy search as `cor edit`.
+    Uses the same fuzzy search as `cor edit`. Supports quoted glob patterns
+    for bulk updates.
 
     Examples:
       cor tag foundation_model ml research
       cor tag -d foundation_model ml
+      cor tag "projects_*" research        # bulk: tag all matching files
     """
     if not tags:
         raise ValidationError("Provide at least one tag to add or remove.")
@@ -373,29 +375,29 @@ def tag(archived: bool, delete_tags: bool, name: str, tags: tuple[str, ...]):
         name = name[8:]
         archived = True
 
-    # Get focused project for prioritization
     focused = get_focused_project()
-    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
-    if result is None:
-        return
+    files = resolve_files(name, include_archived=archived, focused_project=focused)
 
-    stem, is_archived = result
+    for stem, is_archived in files:
+        _apply_tags(stem, is_archived, tags, delete_tags)
+
+
+def _apply_tags(stem: str, is_archived: bool, tags: tuple[str, ...], delete_tags: bool):
+    """Add or remove `tags` on a single note file."""
     file_path = get_file_path(stem, is_archived)
-
     post = frontmatter.load(file_path)
-
     existing = post.get("tags", [])
-    
+
     if delete_tags:
         new_tags = [t for t in existing if t not in tags]
         if len(new_tags) == len(existing):
-            log_info("No matching tags to remove.")
+            log_info(f"{stem}: no matching tags to remove.")
             return
         summary = f"Removed tags from {stem}: {', '.join(sorted(set(existing) - set(new_tags)))}"
     else:
         to_add = [t for t in tags if t not in existing]
         if not to_add:
-            log_info("Tags already up to date.")
+            log_info(f"{stem}: tags already up to date.")
             return
         new_tags = existing + to_add
         summary = f"Added tags to {stem}: {', '.join(to_add)}"
@@ -429,16 +431,18 @@ def tag(archived: bool, delete_tags: bool, name: str, tags: tuple[str, ...]):
 @click.argument("text", nargs=-1, type=str)
 @require_init
 def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
-    """Set or remove a task's due date using natural language.
+    """Set or remove due dates on one or more tasks using natural language.
 
-    Uses the same fuzzy search as `cor edit`.
+    Uses the same fuzzy search as `cor edit`. Supports quoted glob patterns
+    for bulk updates (tasks only).
 
     \b
     Examples:
       cor due task1 tomorrow
       cor due task1 next friday 9am
       cor due task1 in 3 days
-      cor due -d task1                  # Remove the due date
+      cor due -d task1                    # Remove the due date
+      cor due "project1.tasks_*" friday   # Bulk: set due on matching tasks
     """
     if not delete_due and not text:
         raise ValidationError("Provide a date (e.g. 'tomorrow') or use -d to clear the due date.")
@@ -448,47 +452,57 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
         archived = True
 
     focused = get_focused_project()
-    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
-    if result is None:
+    from ..utils import is_glob_pattern
+    files = resolve_files(
+        name,
+        include_archived=archived,
+        focused_project=focused,
+        note_type="task" if is_glob_pattern(name) else None,
+    )
+    if not files:
         return
 
-    stem, is_archived = result
-    file_path = get_file_path(stem, is_archived)
+    due_date = None
+    if not delete_due:
+        text_str = " ".join(text)
+        _, due_date, _, _, _ = parse_natural_language_text(f"due {text_str}")
+        if due_date is None:
+            raise ValidationError(f"Could not parse date: '{text_str}'")
 
-    post = frontmatter.load(file_path)
+    notes_dir = get_notes_dir()
+    files_to_sync = []
+    for stem, is_archived in files:
+        file_path = get_file_path(stem, is_archived)
+        post = frontmatter.load(file_path)
 
-    if delete_due:
-        if "due" not in post.metadata:
-            log_info(f"{stem} has no due date.")
-            return
-        old_due = post.metadata.pop("due")
+        if delete_due:
+            if "due" not in post.metadata:
+                log_info(f"{stem} has no due date.")
+                continue
+            old_due = post.metadata.pop("due")
+            post["modified"] = datetime.now().strftime(DATE_TIME)
+            with open(file_path, "wb") as f:
+                frontmatter.dump(post, f, sort_keys=False)
+            files_to_sync.append(str(file_path))
+            log_info(f"Cleared due date on {stem} (was {old_due}).")
+            continue
+
+        old_due = post.metadata.get("due")
+        post["due"] = due_date.strftime(DATE_TIME)
         post["modified"] = datetime.now().strftime(DATE_TIME)
         with open(file_path, "wb") as f:
             frontmatter.dump(post, f, sort_keys=False)
-        runner = MaintenanceRunner(get_notes_dir())
-        runner.sync([str(file_path)])
-        log_info(f"Cleared due date on {stem} (was {old_due}).")
-        return
+        files_to_sync.append(str(file_path))
 
-    text_str = " ".join(text)
-    _, due_date, _, _, _ = parse_natural_language_text(f"due {text_str}")
-    if due_date is None:
-        raise ValidationError(f"Could not parse date: '{text_str}'")
+        new_due = due_date.strftime(DATE_TIME)
+        if old_due:
+            log_info(f"{stem}: due {old_due} → {new_due}")
+        else:
+            log_info(f"{stem}: set due {new_due}")
 
-    old_due = post.metadata.get("due")
-    post["due"] = due_date.strftime(DATE_TIME)
-    post["modified"] = datetime.now().strftime(DATE_TIME)
-    with open(file_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
-
-    runner = MaintenanceRunner(notes_dir=get_notes_dir())
-    runner.sync([str(file_path)])
-
-    new_due = due_date.strftime(DATE_TIME)
-    if old_due:
-        log_info(f"{stem}: due {old_due} → {new_due}")
-    else:
-        log_info(f"{stem}: set due {new_due}")
+    if files_to_sync:
+        runner = MaintenanceRunner(notes_dir=notes_dir)
+        runner.sync(files_to_sync)
 
 
 @cli.command(name="delete")
@@ -496,36 +510,37 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
 @click.argument("name", shell_complete=complete_existing_name)
 @require_init
 def delete(archived: bool, name: str):
-    """Delete a note quickly and update references.
+    """Delete one or more notes and update references.
 
-    Supports fuzzy matching for file names.
+    Supports fuzzy matching, or quoted glob patterns for bulk deletion.
 
     \b
     Examples:
         cor delete my-proj                  # Fuzzy matches 'my-project'
         cor delete -a old-project           # Include archived files
+        cor delete "project1.tasks_*"       # Bulk delete matching files
     """
     notes_dir = get_notes_dir()
 
-    # Handle "archive/" prefix if present (from tab completion)
     if name.startswith("archive/"):
         name = name[8:]
         archived = True
 
-    # Get focused project for prioritization
     focused = get_focused_project()
-    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
+    files = resolve_files(name, include_archived=archived, focused_project=focused)
 
-    if result is None:
-        return  # User cancelled
+    if not files:
+        return
 
-    stem, is_archived = result
-    file_path = get_file_path(stem, is_archived)
+    deleted_paths = []
+    for stem, is_archived in files:
+        file_path = get_file_path(stem, is_archived)
+        file_path.unlink()
+        deleted_paths.append(str(file_path))
+        click.echo(click.style(f"Deleted {stem}.md", fg="red"))
 
-    file_path.unlink()
     runner = MaintenanceRunner(notes_dir)
-    runner.sync([], deleted=[str(file_path)])
-    click.echo(click.style(f"Deleted {stem}.md", fg="red"))
+    runner.sync([], deleted=deleted_paths)
 
 
 @cli.command()
@@ -575,15 +590,12 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
 
     notes_dir = get_notes_dir()
 
-    # Determine the actual status value (from --status option or positional arg)
     actual_status = status_option or status
-
     if actual_status is None:
         raise ValidationError(
             "Status is required. Usage: cor mark <task> <status> or cor mark -s <status> <task>"
         )
 
-    # Validate against union of task + project statuses upfront
     all_valid = VALID_TASK_STATUS | VALID_PROJECT_STATUS
     if actual_status not in all_valid:
         raise ValidationError(
@@ -592,46 +604,72 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
             f"Project: {', '.join(sorted(VALID_PROJECT_STATUS))}"
         )
 
-    # Handle archive/ prefix from tab completion
     if name.startswith("archive/"):
         name = name[8:]
         archived = True
 
-    # Check if name is a glob pattern
-    if is_glob_pattern(name):
-        # Bulk operation using glob pattern (tasks only)
-        _mark_bulk(name, actual_status, text, notes_dir, archived)
-        return
-
-    # Single file operation with fuzzy matching (tasks and projects)
+    bulk = is_glob_pattern(name)
     focused = get_focused_project()
-    result = resolve_file_fuzzy(name, include_archived=archived, focused_project=focused)
-
-    if result is None:
-        return  # User cancelled
-
-    stem, is_archived = result
-    file_path = get_file_path(stem, is_archived)
-
-    note = parse_metadata(file_path)
-
-    if not note:
-        raise NotFoundError(f"Could not parse file: {file_path}")
-
-    if note.note_type == "note":
-        raise ValidationError(f"'{stem}' is a note. This command only works with tasks and projects.")
-
-    if note.note_type == "project":
-        _update_project_status(file_path, note, actual_status, notes_dir)
+    files = resolve_files(
+        name,
+        include_archived=archived,
+        focused_project=focused,
+        note_type="task" if bulk else None,
+    )
+    if not files:
         return
 
-    # Task path
-    if actual_status not in VALID_TASK_STATUS:
+    if bulk and actual_status not in VALID_TASK_STATUS:
         raise ValidationError(
-            f"Invalid task status '{actual_status}'. "
+            f"Bulk mark only supports tasks. Invalid task status '{actual_status}'. "
             f"Valid: {', '.join(sorted(VALID_TASK_STATUS))}"
         )
-    _update_task_status(file_path, note, actual_status, text, notes_dir)
+
+    updated = 0
+    errors = 0
+    files_to_sync: list[str] = []
+    for stem, is_archived in files:
+        file_path = get_file_path(stem, is_archived)
+        note = parse_metadata(file_path)
+        if not note:
+            raise NotFoundError(f"Could not parse file: {file_path}")
+
+        if note.note_type == "note":
+            raise ValidationError(
+                f"'{stem}' is a note. This command only works with tasks and projects."
+            )
+
+        if note.note_type == "project":
+            _update_project_status(file_path, note, actual_status, notes_dir)
+            continue
+
+        if actual_status not in VALID_TASK_STATUS:
+            raise ValidationError(
+                f"Invalid task status '{actual_status}'. "
+                f"Valid: {', '.join(sorted(VALID_TASK_STATUS))}"
+            )
+        try:
+            _update_task_status(
+                file_path, note, actual_status, text, notes_dir, display=not bulk
+            )
+            files_to_sync.append(str(file_path))
+            updated += 1
+        except ValidationError as e:
+            if not bulk:
+                raise
+            click.secho(f"  Skipped {stem}: {e}", fg="yellow")
+            errors += 1
+
+    if bulk:
+        if files_to_sync:
+            runner = MaintenanceRunner(notes_dir)
+            runner.sync(files_to_sync)
+        symbol = STATUS_SYMBOLS.get(actual_status, "")
+        click.echo(
+            f"\n{symbol} Updated {updated} task(s) to {click.style(actual_status, bold=True)}"
+        )
+        if errors:
+            click.echo(f"  ({errors} skipped due to errors)")
 
 
 def _update_project_status(file_path: Path, note, status: str, notes_dir: Path):
@@ -683,76 +721,6 @@ def _update_project_status(file_path: Path, note, status: str, notes_dir: Path):
         f"{click.style(format_title(note.path.stem), bold=True)}: "
         f"{click.style(old_status, fg='white')} → {click.style(status, fg=color)}"
     )
-
-
-def _mark_bulk(pattern: str, status: str, text: tuple[str, ...], notes_dir: Path, include_archive: bool):
-    """Mark multiple tasks matching a glob pattern.
-    
-    Args:
-        pattern: Glob pattern to match tasks
-        status: New status value
-        text: Optional text to append
-        notes_dir: Path to notes directory
-        include_archive: Whether to include archived files
-    """
-    from ..utils import expand_glob_pattern
-    
-    # Find all matching task files
-    matching_files = expand_glob_pattern(pattern, notes_dir, include_archive)
-    
-    # Filter to only tasks (not projects or notes)
-    task_files = []
-    for file_path in matching_files:
-        note = parse_metadata(file_path)
-        if note and note.note_type == "task":
-            task_files.append((file_path, note))
-    
-    if not task_files:
-        raise NotFoundError(f"No tasks match pattern: {pattern}")
-    
-    # Confirm bulk operation if more than 3 files
-    if len(task_files) > 3:
-        click.echo(f"Will update {len(task_files)} tasks to '{status}':")
-        for file_path, note in task_files[:5]:
-            click.echo(f"  - {file_path.stem} ({note.status or 'none'} → {status})")
-        if len(task_files) > 5:
-            click.echo(f"  ... and {len(task_files) - 5} more")
-        
-        # In non-interactive mode, auto-continue; otherwise prompt
-        if sys.stdin.isatty():
-            if not click.confirm("Continue?"):
-                click.echo("Cancelled.")
-                return
-        else:
-            click.echo("Non-interactive mode: proceeding with update.")
-    
-    # Update each task
-    updated_count = 0
-    error_count = 0
-    files_to_sync = []
-    
-    for file_path, note in task_files:
-        try:
-            _update_task_status(file_path, note, status, text, notes_dir, display=False)
-            files_to_sync.append(str(file_path))
-            updated_count += 1
-        except ValidationError as e:
-            click.secho(f"  Skipped {file_path.stem}: {e}", fg="yellow")
-            error_count += 1
-        except Exception as e:
-            click.secho(f"  Error {file_path.stem}: {e}", fg="red")
-            error_count += 1
-    
-    # Run sync for all updated files
-    if files_to_sync:
-        runner = MaintenanceRunner(notes_dir)
-        runner.sync(files_to_sync)
-    
-    # Summary
-    symbol = STATUS_SYMBOLS.get(status, "")
-    click.echo(f"\n{symbol} Updated {updated_count} task(s) to {click.style(status, bold=True)}")
-    if error_count:
-        click.echo(f"  ({error_count} skipped due to errors)")
 
 
 def _update_task_status(

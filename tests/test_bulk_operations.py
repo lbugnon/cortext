@@ -89,7 +89,7 @@ class TestMarkBulk:
 
         result = runner.invoke(cli, ["mark", "nonexistent.*", "done"])
         assert result.exit_code != 0
-        assert "No tasks match pattern" in result.output
+        assert "No files match pattern" in result.output
 
 
 class TestMoveBulk:
