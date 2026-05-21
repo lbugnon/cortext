@@ -1,7 +1,7 @@
 """Tests for vault-path resolution in cor.config.
 
 Covers the multi-vault discovery added on top of the original config-only
-lookup: cwd-walk for `root.md`, COR_VAULT env override, and config fallback.
+lookup: cwd-walk for `backlog.md`, COR_VAULT env override, and config fallback.
 """
 
 from pathlib import Path
@@ -28,7 +28,7 @@ def _isolate_config(monkeypatch, tmp_path: Path, vault_in_config: Path | None = 
 def _make_vault(parent: Path, name: str = "vault") -> Path:
     vault = parent / name
     vault.mkdir()
-    (vault / "root.md").write_text("# root\n")
+    (vault / "backlog.md").write_text("# Backlog\n")
     return vault
 
 
@@ -46,7 +46,7 @@ def test_find_vault_from_cwd_in_subdirectory(tmp_path, monkeypatch):
     assert _find_vault_from_cwd() == vault
 
 
-def test_find_vault_from_cwd_returns_none_when_no_root_md(tmp_path, monkeypatch):
+def test_find_vault_from_cwd_returns_none_when_no_backlog_md(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert _find_vault_from_cwd() is None
 
@@ -69,7 +69,7 @@ def test_get_vault_path_falls_back_to_env_when_cwd_misses(tmp_path, monkeypatch)
     cfg_vault.mkdir()
     _isolate_config(monkeypatch, tmp_path, vault_in_config=cfg_vault)
     monkeypatch.setenv("COR_VAULT", str(env_vault))
-    # cwd is tmp_path itself — no root.md anywhere in chain
+    # cwd is tmp_path itself — no backlog.md anywhere in chain
     monkeypatch.chdir(tmp_path)
 
     assert get_vault_path() == env_vault

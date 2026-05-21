@@ -197,7 +197,7 @@ def maintenance_sync(sync_all: bool):
 
     # Get files to sync
     if sync_all:
-        files = [str(p) for p in notes_dir.glob("*.md") if p.stem not in ("root", "backlog")]
+        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog"]
         archive_dir = notes_dir / "archive"
         if archive_dir.exists():
             files += [str(p) for p in archive_dir.glob("*.md")]
@@ -339,7 +339,7 @@ def maintenance_check_titles(fix: bool, archived: bool):
     # Collect files to check
     files: list[Path] = [
         p for p in notes_dir.glob("*.md")
-        if p.stem not in ("root", "backlog")
+        if p.stem != "backlog"
     ]
     if archived and archive_dir.exists():
         files.extend(archive_dir.glob("*.md"))

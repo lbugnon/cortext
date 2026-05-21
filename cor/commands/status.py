@@ -1,7 +1,6 @@
 """Status and reporting commands for Cor CLI."""
 
 from datetime import datetime, date, timedelta
-import re
 
 import click
 
@@ -209,32 +208,6 @@ def _format_dependency_indicator(note, all_notes: list, verbose: bool = False) -
         return "\n".join(lines) if lines else ""
 
 
-def _update_root_section(notes_dir, section: str, body: str) -> None:
-    """Replace a section in root.md with new body content."""
-    root_path = notes_dir / "root.md"
-    if not root_path.exists():
-        return
-
-    content = root_path.read_text()
-    body_clean = body.lstrip("\n").rstrip() + "\n"
-    pattern = rf"(## {re.escape(section)}\n)(.*?)(\n## |\Z)"
-    match = re.search(pattern, content, flags=re.S)
-
-    if match:
-        before = content[:match.start()]
-        after = content[match.end():]
-        delimiter = match.group(3)
-        new_section = f"{match.group(1)}\n{body_clean}"
-        if delimiter.startswith("\n## "):
-            new_content = before + new_section + delimiter + after
-        else:
-            new_content = before + new_section
-    else:
-        new_content = content.rstrip() + f"\n\n## {section}\n\n{body_clean}"
-
-    root_path.write_text(new_content)
-
-
 def show_tree(
     parent_name: str,
     tasks_by_parent: dict,
@@ -244,7 +217,6 @@ def show_tree(
     render_fn=None,
     show_separators: bool = False,
     separator_transitions: list = None,
-    capture: list | None = None,
     verbose: bool = False,
     all_notes: list | None = None,
     note_counts: dict[str, int] | None = None,
@@ -307,8 +279,6 @@ def show_tree(
                     sep_prefix = prefix + "│"
                     sep_line = click.style(f"{sep_prefix}   ---", dim=True)
                     click.echo(sep_line)
-                    if capture is not None:
-                        capture.append(click.unstyle(sep_line))
                     break
 
         # Render the task
@@ -332,8 +302,6 @@ def show_tree(
 
         line = f"{prefix}{branch}{task_display}"
         click.echo(line)
-        if capture is not None:
-            capture.append(click.unstyle(line))
 
         # Show description if verbose
         if verbose:
@@ -341,8 +309,6 @@ def show_tree(
             if desc:
                 desc_line = f"{child_prefix}    {click.style(desc, dim=True)}"
                 click.echo(desc_line)
-                if capture is not None:
-                    capture.append(click.unstyle(desc_line))
 
             # Show due date in verbose mode
             if task.due:
@@ -350,8 +316,6 @@ def show_tree(
                 due_color = "red" if task.is_overdue else "yellow" if task.is_due_this_week else "white"
                 due_line = f"{child_prefix}    {click.style(f'Due: {due_str}', dim=True, fg=due_color)}"
                 click.echo(due_line)
-                if capture is not None:
-                    capture.append(click.unstyle(due_line))
 
             # Show dependency details in verbose mode
             if all_notes:
@@ -360,8 +324,6 @@ def show_tree(
                     for detail_line in dep_details.split("\n"):
                         styled_line = f"{child_prefix}    {click.style(detail_line, dim=True, fg='yellow')}"
                         click.echo(styled_line)
-                        if capture is not None:
-                            capture.append(click.unstyle(styled_line))
 
         # Recurse for children only if within depth limit
         if max_depth is None or current_depth < max_depth:
@@ -374,7 +336,6 @@ def show_tree(
                 render_fn=render_fn,
                 show_separators=show_separators,
                 separator_transitions=separator_transitions,
-                capture=capture,
                 verbose=verbose,
                 all_notes=all_notes,
                 note_counts=note_counts,
@@ -395,15 +356,13 @@ def _group_by_project(tasks: list) -> dict:
     return groups
 
 
-def _print_section(title: str, tasks: list, color: str, formatter, limit: int, capture: list | None = None, verbose: bool = False) -> bool:
+def _print_section(title: str, tasks: list, color: str, formatter, limit: int, verbose: bool = False) -> bool:
     """Print section with tasks grouped by project. Returns True if printed."""
     if not tasks:
         return False
 
     heading = click.style(f"\n{title}", fg=color, bold=True)
     click.echo(heading)
-    if capture is not None:
-        capture.append(click.unstyle(heading))
     shown = 0
     groups = _group_by_project(tasks)
 
@@ -413,8 +372,6 @@ def _print_section(title: str, tasks: list, color: str, formatter, limit: int, c
             break
         project_line = f"  {project_display}"
         click.echo(project_line)
-        if capture is not None:
-            capture.append(click.unstyle(project_line))
         for task in project_tasks:
             if limit and shown >= limit:
                 break
@@ -424,18 +381,14 @@ def _print_section(title: str, tasks: list, color: str, formatter, limit: int, c
             styled_symbol = click.style(symbol, fg=task_color)
             line = f"  └── {styled_symbol} {task.title}{info}"
             click.echo(line)
-            if capture is not None:
-                capture.append(click.unstyle(line))
-            
+
             # Show description if verbose
             if verbose:
                 desc = _extract_description(task)
                 if desc:
                     desc_line = f"      {click.style(desc, dim=True)}"
                     click.echo(desc_line)
-                    if capture is not None:
-                        capture.append(click.unstyle(desc_line))
-            
+
             shown += 1
 
     remaining = len(tasks) - shown
@@ -494,7 +447,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
     If a project is focused (via `cor focus`), automatically filters to that project.
     """
     notes_dir = get_notes_dir()
-    root_lines: list[str] = []
 
     # Apply focus if set and no explicit tag provided
     focused = get_focused_project()
@@ -548,7 +500,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "red",
         format_overdue,
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
@@ -563,7 +514,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "yellow",
         lambda n: f" ({format_time_ago(n.modified)} since update)" if n.modified else "",
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
@@ -583,7 +533,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "cyan",
         lambda n: f" [{n.priority}]" if n.priority else "",
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
@@ -598,7 +547,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "blue",
         lambda n: f" ({format_time_ago(n.modified)})" if n.modified else "",
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
@@ -617,7 +565,6 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "magenta",
         lambda n: "",
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
@@ -636,20 +583,14 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         "white",
         lambda n: "",
         limit,
-        capture=root_lines,
         verbose=verbose,
     ):
         sections_printed = True
 
     if not sections_printed:
-        line = click.style("\nAll clear! Nothing urgent for today.", fg="green")
-        click.echo(line)
-        root_lines.append(click.unstyle(line))
+        click.echo(click.style("\nAll clear! Nothing urgent for today.", fg="green"))
 
     click.echo()
-
-    if root_lines:
-        _update_root_section(notes_dir, "Daily", "\n".join(root_lines))
 
 
 def _get_project_last_activity(project_name: str, all_notes: list) -> datetime | None:
@@ -680,7 +621,6 @@ def projects(show_all: bool):
     - Use -a to include done/archived projects
     """
     notes_dir = get_notes_dir()
-    root_lines: list[str] = []
 
     notes = find_notes(notes_dir)
 
@@ -719,7 +659,6 @@ def projects(show_all: bool):
     header = click.style("\nProjects:", bold=True)
     click.echo(header)
     click.echo()
-    root_lines.append(click.unstyle(header))
 
     for p in projects_list:
         # Use last activity from children, fall back to project modified date
@@ -747,12 +686,8 @@ def projects(show_all: bool):
         display_title = format_title(p.title)
         line = f"  {status_styled} {display_title} - {age_styled}"
         click.echo(line)
-        root_lines.append(click.unstyle(line))
 
     click.echo()
-
-    if root_lines:
-        _update_root_section(notes_dir, "Projects", "\n".join(root_lines))
 
 
 @click.command()
@@ -779,7 +714,6 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
     If a project is focused (via `cor focus`), automatically filters to that project.
     """
     notes_dir = get_notes_dir()
-    root_lines: list[str] = []
 
     # Apply focus if set and no explicit tag provided
     focused = get_focused_project()
@@ -885,7 +819,6 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
 
     def emit(line: str = ""):
         click.echo(line)
-        root_lines.append(click.unstyle(line))
 
     # Show focus indicator if filtering by focused project
     if focused and tag == focused:
@@ -944,7 +877,6 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
                 filter_fn=weekly_filter,
                 sort_fn=weekly_sort,
                 render_fn=weekly_render,
-                capture=root_lines,
                 verbose=verbose,
                 all_notes=notes,
                 note_counts=note_counts,
@@ -960,16 +892,12 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
                     emit(f"    • {hp.title} {status_str}")
 
         emit()
-        if root_lines:
-            _update_root_section(notes_dir, "Weekly", "\n".join(root_lines))
         return
 
     # === Default view: show completed tasks this week ===
     if not projects_with_completed:
         emit(click.style("\nNo completed tasks this week.", dim=True))
         emit()
-        if root_lines:
-            _update_root_section(notes_dir, "Weekly", "\n".join(root_lines))
         return
 
     emit(click.style(f"\nCompleted: {len(completed_this_week)} tasks\n", fg="green", bold=True))
@@ -1021,15 +949,11 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
             tasks_by_parent,
             filter_fn=weekly_filter_completed,
             render_fn=weekly_render_completed,
-            capture=root_lines,
             verbose=verbose,
             all_notes=notes,
             note_counts=note_counts,
         )
         emit()
-
-    if root_lines:
-        _update_root_section(notes_dir, "Weekly", "\n".join(root_lines))
 
 
 @click.command(short_help="Show a project's or group's task tree")
@@ -1245,7 +1169,7 @@ def status(weeks: int | None):
 
     for n in notes:
         # Skip special files
-        if n.note_type in ("backlog", "root"):
+        if n.note_type == "backlog":
             continue
 
         # Count content lines (non-empty lines in content)

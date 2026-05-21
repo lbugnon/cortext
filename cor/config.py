@@ -57,17 +57,17 @@ def save_config(config: dict) -> None:
 
 
 def _find_vault_from_cwd() -> Path | None:
-    """Walk up from cwd looking for a directory containing root.md."""
+    """Walk up from cwd looking for a directory containing backlog.md."""
     current = Path.cwd()
     for ancestor in [current, *current.parents]:
-        if (ancestor / "root.md").exists():
+        if (ancestor / "backlog.md").exists():
             return ancestor
     return None
 
 
 def get_vault_path() -> Path:
     """Resolve vault path with this precedence:
-    1. Nearest ancestor of cwd containing root.md (vault marker).
+    1. Nearest ancestor of cwd containing backlog.md (vault marker).
     2. COR_VAULT environment variable.
     3. `vault` key in ~/.config/cor/config.yaml.
 
@@ -102,9 +102,9 @@ def set_vault_path(path: Path) -> None:
 
 
 def is_vault_initialized(vault_path: Path | None = None) -> bool:
-    """Check if a vault is initialized (has root.md)."""
+    """Check if a vault is initialized (has backlog.md)."""
     vault = vault_path or get_vault_path()
-    return (vault / "root.md").exists()
+    return (vault / "backlog.md").exists()
 
 
 def get_verbosity() -> int:

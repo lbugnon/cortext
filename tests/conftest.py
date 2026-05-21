@@ -91,16 +91,8 @@ type: note
 # {name}
 """)
 
-    # Create root.md
+    # Create backlog.md (vault marker)
     today = date.today().isoformat()
-    (vault / "root.md").write_text(f"""\
----
-modified: {today}
----
-# Cor
-""")
-
-    # Create backlog.md
     (vault / "backlog.md").write_text(f"""\
 ---
 created: {today}

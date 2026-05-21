@@ -93,7 +93,7 @@ def config_cmd(key: str | None, value: str | None):
 
             click.echo()
             click.echo(f"Active vault: {click.style(str(notes_dir), fg='cyan', bold=True)}")
-            if (notes_dir / "root.md").exists():
+            if (notes_dir / "backlog.md").exists():
                 click.echo(click.style("  (initialized)", fg="green"))
             else:
                 click.echo(click.style("  (not initialized - run 'cor init')", fg="yellow"))

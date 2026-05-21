@@ -24,7 +24,6 @@ class TestFileIterator:
         (notes_dir / "archive").mkdir()
 
         # Create sample files
-        (notes_dir / "root.md").write_text("root")
         (notes_dir / "backlog.md").write_text("backlog")
         (notes_dir / "project1.md").write_text("project")
         (notes_dir / "project1.task1.md").write_text("task")
@@ -51,13 +50,12 @@ class TestFileIterator:
 
         stems = [n.stem for n in notes]
 
-        # Should include all notes except root and backlog
+        # Should include all notes except backlog
         assert "project1" in stems
         assert "project1.task1" in stems
         assert "project2" in stems
 
         # Should NOT include special files
-        assert "root" not in stems
         assert "backlog" not in stems
 
         # Should NOT include archived
@@ -83,7 +81,6 @@ class TestFileIterator:
         stems = [n.stem for n in notes]
 
         # Should include special files
-        assert "root" in stems
         assert "backlog" in stems
 
     def test_iter_projects(self, iterator):
@@ -177,7 +174,6 @@ class TestFileIterator:
         assert "project1.task1" in stems
 
         # Should NOT include special
-        assert "root" not in stems
         assert "backlog" not in stems
 
     def test_count_children(self, iterator):

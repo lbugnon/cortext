@@ -26,7 +26,7 @@ class FileIterator:
     """Consistent file iteration patterns for notes."""
 
     # Files to exclude from iteration
-    EXCLUDED_STEMS = {"root", "backlog"}
+    EXCLUDED_STEMS = {"backlog"}
 
     def __init__(self, notes_dir: Path):
         """Initialize file iterator.
@@ -43,7 +43,7 @@ class FileIterator:
 
         Args:
             include_archive: If True, include archived files
-            exclude_special: If True, exclude root and backlog
+            exclude_special: If True, exclude backlog
 
         Yields:
             Path objects for each note file
@@ -189,7 +189,7 @@ class FileIterator:
 
         Args:
             include_archive: If True, include archived notes
-            exclude_special: If True, exclude root and backlog
+            exclude_special: If True, exclude backlog
 
         Returns:
             List of note stems (sorted)

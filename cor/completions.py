@@ -212,7 +212,7 @@ def complete_existing_name(ctx, param, incomplete: str) -> list:
 
     if not is_archive_path:
         for path in notes_dir.glob("*.md"):
-            if path.stem not in ("root", "backlog") and not path.name.startswith("."):
+            if path.stem != "backlog" and not path.name.startswith("."):
                 # Filter to focused project if set
                 if focused:
                     if path.stem == focused or path.stem.startswith(f"{focused}."):
@@ -314,7 +314,7 @@ def complete_task_name(ctx, param, incomplete: str) -> list:
     # Collect active task file stems
     if not is_archive_path:
         for path in notes_dir.glob("*.md"):
-            if path.stem in ("root", "backlog"):
+            if path.stem == "backlog":
                 continue
             note = parse_metadata(path)
             if note and note.note_type == "task":

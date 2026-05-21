@@ -312,7 +312,7 @@ def find_notes(notes_dir: Path, metadata_only: bool = False) -> list:
     notes = []
     for path in notes_dir.glob("*.md"):
         # Skip hidden files and special files
-        if path.name.startswith(".") or path.stem in ("root", "backlog"):
+        if path.name.startswith(".") or path.stem == "backlog":
             continue
         try:
             if metadata_only:
