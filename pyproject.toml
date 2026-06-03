@@ -7,7 +7,7 @@ name = "cor-text"
 version = "0.1.4"
 description = "Cor - Plain text knowledge management for the terminal"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "lbugnon", email = "lbugnon@sinc.unl.edu.ar"}
@@ -18,7 +18,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business",
     "Topic :: Text Processing :: Markup :: Markdown",
 ]
@@ -31,21 +34,22 @@ dependencies = [
     "arxiv>=2.0.0",
     "bibtexparser>=1.4",
     "dateparser>=1.2",
-    "google-auth-oauthlib>=1.0",
-    "google-auth-httplib2>=0.1",
-    "google-api-python-client>=2.0",
-    "ripgrepy>=2.0",  # Python wrapper for ripgrep binary
     "textual>=0.50.0",
 ]
 
 [project.urls]
-Repository = "https://github.com/lbugnon/cor"
+Repository = "https://github.com/lbugnon/cortex_pkm"
 
 [project.scripts]
 cor = "cor.cli:cli"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+calendar = [
+    "google-auth-oauthlib>=1.0",
+    "google-auth-httplib2>=0.1",
+    "google-api-python-client>=2.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

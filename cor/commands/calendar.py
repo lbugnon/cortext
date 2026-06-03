@@ -55,6 +55,19 @@ def _default_client_config() -> dict:
     }
 
 
+def _require_google() -> None:
+    """Ensure the optional Google Calendar dependencies are installed."""
+    try:
+        import google.auth  # noqa: F401
+        import googleapiclient  # noqa: F401
+        import google_auth_oauthlib  # noqa: F401
+    except ImportError as e:
+        raise ConfigError(
+            "Google Calendar support is not installed. Install it with:\n"
+            "  pip install cor-text[calendar]"
+        ) from e
+
+
 def _get_credentials_file() -> Path:
     """Get path to store Google credentials (refresh token)."""
     config_dir = Path.home() / ".config" / "cor"
@@ -216,6 +229,7 @@ def auth(client_id: Optional[str], client_secret: Optional[str]):
     environment variables. To pass them explicitly instead:
       cor calendar auth --client-id YOUR_ID --client-secret YOUR_SECRET
     """
+    _require_google()
     from google_auth_oauthlib.flow import InstalledAppFlow
     
     # Determine which credentials to use
@@ -279,6 +293,7 @@ def sync(calendar: str):
       cor calendar sync              # Sync all due dates
       cor calendar sync -c "My Tasks" # Use different calendar
     """
+    _require_google()
     # Check authentication
     service = _build_service()
     if not service:

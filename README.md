@@ -540,7 +540,7 @@ source ~/.zshrc # or .bashrc
 ### User Configuration & Vault
 
 ```
-~/.config/cortex/
+~/.config/cor/
 ├── config.yaml             # Global config (vault path, verbosity)
 └── google_credentials.pickle  # Google Calendar auth (chmod 600)
 
@@ -564,38 +564,55 @@ your-vault/                 # Your notes directory
 ### Project Source (Development)
 
 ```
-cor/                        # Repository root
+cortex_pkm/                 # Repository root
 ├── cor/                    # Main package
-│   ├── __init__.py
-│   ├── cli.py              # Command-line interface
-│   ├── config.py           # Vault path resolution
-│   ├── parser.py           # YAML/markdown parsing
-│   ├── schema.py           # Data schema & validation
-│   ├── utils.py            # Utility functions
+│   ├── __init__.py         # Version
+│   ├── config.py           # Vault path resolution & user config
+│   ├── schema.py           # Schema constants (loaded from assets/schema.yaml)
+│   ├── exceptions.py       # Custom exception hierarchy
+│   ├── utils.py            # Utility functions (incl. NLP date/tag parsing)
 │   ├── completions.py      # Shell completion logic
-│   ├── fuzzy.py            # Fuzzy matching for search
-│   ├── maintenance.py      # Auto-sync & archiving
-│   ├── commands/           # Command implementations
-│   │   ├── __init__.py
-│   │   ├── process.py      # Backlog processing
-│   │   ├── refactor.py     # Rename/move operations
-│   │   └── status.py       # Status display
-│   ├── hooks/              # Git integration
+│   ├── crossref.py         # Crossref/arXiv DOI lookup
+│   ├── bibtex.py           # references.bib read/write
+│   ├── dependencies.py     # Task/project dependency logic
+│   ├── cli/                # CLI entry point & command groups
+│   │   ├── __init__.py     # `cli` group, registration, hook install
+│   │   ├── init.py         # init / example-vault
+│   │   ├── notes.py        # new, edit, mark, expand, ...
+│   │   ├── config.py       # config, focus, inbox
+│   │   ├── maintenance.py  # sync, maintenance, hooks
+│   │   └── search_cmd.py   # search
+│   ├── commands/           # Additional command modules
+│   │   ├── status.py       # daily, weekly, projects, tree, status
+│   │   ├── refactor.py     # rename/move/group
+│   │   ├── process.py      # backlog processing
+│   │   ├── refs.py         # bibliography (cor ref)
+│   │   ├── dependencies.py # cor depend
+│   │   ├── calendar.py     # Google Calendar integration
+│   │   ├── inbox.py        # Telegram inbox
+│   │   └── log.py          # backlog capture
+│   ├── core/               # Core business logic
+│   │   ├── files.py        # FileIterator / NoteFileManager
+│   │   ├── notes.py        # note parsing
+│   │   ├── links.py        # link parsing & rewriting
+│   │   ├── archive.py      # ArchiveManager
+│   │   └── refs.py         # reference metadata
+│   ├── search/             # Search & completion
+│   │   ├── content.py      # ripgrep content search
+│   │   ├── fuzzy.py        # fuzzy matching
+│   │   └── completion.py   # completion helpers
+│   ├── sync/
+│   │   └── runner.py       # MaintenanceRunner (hook/sync logic)
+│   ├── tui/
+│   │   └── tree_app.py     # interactive tree (cor tree -i)
+│   ├── hooks/
 │   │   └── pre-commit      # Pre-commit hook script
-│   └── assets/             # Built-in templates & schema
+│   └── assets/             # Built-in templates, schema, nvim plugin
 │       ├── schema.yaml
-│       ├── project.md
-│       ├── task.md
-│       ├── note.md
-│       └── backlog.md
+│       ├── project.md / task.md / note.md / backlog.md / ref.md
+│       └── cortex.lua      # Neovim/LazyVim plugin
 ├── tests/                  # Test suite
-│   ├── conftest.py         # Test configuration
-│   ├── test_cli.py         # CLI command tests
-│   ├── test_delete.py      # Delete operation tests
-│   ├── test_maintenance.py # Hook & sync tests
-│   ├── test_precommit.py   # Pre-commit hook tests
-│   ├── test_rename_*.py    # Rename/move tests
-│   └── __pycache__/
+├── docs/                   # Additional docs (nvim.md)
 ├── pyproject.toml          # Project config & dependencies
 ├── README.md               # This file
 ├── LICENSE                 # MIT License
