@@ -7,12 +7,6 @@ from click.testing import CliRunner
 from cor.cli import cli
 
 
-@pytest.fixture
-def runner():
-    """Create a CLI test runner."""
-    return CliRunner()
-
-
 class TestMarkBulk:
     """Test bulk mark operations with glob patterns."""
 

@@ -7,6 +7,13 @@ from pathlib import Path
 from datetime import date
 
 import pytest
+from click.testing import CliRunner
+
+
+@pytest.fixture
+def runner():
+    """Create a Click CLI test runner."""
+    return CliRunner()
 
 
 @pytest.fixture
@@ -243,63 +250,3 @@ Subtask {i} description
     }
 
 
-def stage_files(vault: Path, *files: Path):
-    """Stage files for commit."""
-    for f in files:
-        subprocess.run(["git", "add", str(f)], cwd=vault, capture_output=True)
-
-
-def run_precommit(vault: Path) -> tuple[int, str, str]:
-    """Run the pre-commit hook and return (returncode, stdout, stderr)."""
-    import sys
-    hook_path = Path(__file__).parent.parent / "cor" / "hooks" / "pre-commit"
-
-    result = subprocess.run(
-        [sys.executable, str(hook_path)],
-        cwd=vault,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "COR_VAULT": str(vault)}
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-def get_frontmatter(filepath: Path) -> dict:
-    """Parse frontmatter from a file."""
-    import yaml
-    content = filepath.read_text()
-    if not content.startswith("---"):
-        return {}
-    end = content.find("\n---\n", 3)
-    if end == -1:
-        return {}
-    try:
-        return yaml.safe_load(content[3:end]) or {}
-    except yaml.YAMLError:
-        return {}
-
-
-def set_status(filepath: Path, status: str):
-    """Update the status field in a file's frontmatter."""
-    content = filepath.read_text()
-    import re
-    new_content = re.sub(
-        r"^status:.*$",
-        f"status: {status}",
-        content,
-        flags=re.MULTILINE
-    )
-    filepath.write_text(new_content)
-
-
-def get_task_checkbox(parent_path: Path, task_name: str) -> str | None:
-    """Extract the checkbox symbol for a task in a parent file.
-
-    Returns the checkbox character (space, x, ., o, ~) or None if not found.
-    task_name should be the stem without .md extension.
-    """
-    import re
-    content = parent_path.read_text()
-    pattern = rf"- \[([x .o~])\] \[[^\]]+\]\((?:archive/)?{re.escape(task_name)}\.md\)"
-    match = re.search(pattern, content)
-    return match.group(1) if match else None

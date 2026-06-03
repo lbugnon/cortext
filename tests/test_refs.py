@@ -20,11 +20,6 @@ BIB = """@article{vaswani2017,
 """
 
 
-@pytest.fixture
-def runner():
-    return CliRunner()
-
-
 def test_search_references_ranks_substring():
     entries = [
         {"ID": "vaswani2017", "author": "Vaswani, Ashish", "title": "Attention Is All You Need", "year": "2017"},

@@ -26,12 +26,6 @@ from cor.core.notes import parse_note, find_notes
 
 
 @pytest.fixture
-def runner():
-    """Create a CLI test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
 def vault_with_dependencies(temp_vault):
     """Create a vault with tasks/projects that have dependencies.
 

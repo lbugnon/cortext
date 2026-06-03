@@ -19,12 +19,6 @@ from cor.cli import cli
 
 
 @pytest.fixture
-def runner():
-    """Create a CLI test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
 def initialized_vault(temp_vault, runner):
     """Return a vault that has been initialized with cor init."""
     # temp_vault already has templates and backlog.md from conftest

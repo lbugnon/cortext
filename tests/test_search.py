@@ -22,12 +22,6 @@ from cor.search import (
 
 
 @pytest.fixture
-def runner():
-    """Create a CLI test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
 def vault_with_content(temp_vault):
     """Create a vault with various content for searching.
     

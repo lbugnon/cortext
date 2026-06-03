@@ -6,11 +6,6 @@ from cor.cli import cli
 
 
 @pytest.fixture
-def runner():
-    return CliRunner()
-
-
-@pytest.fixture
 def initialized_vault(temp_vault, runner, monkeypatch):
     monkeypatch.chdir(temp_vault)
     # Init git for hooks/maintenance in rename
