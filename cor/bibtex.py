@@ -71,7 +71,8 @@ def result_to_bib_entry(citekey: str, result: CrossrefResult) -> dict:
 
 def get_bib_path(notes_dir: Path) -> Path:
     """Get path to references.bib file."""
-    return notes_dir / "ref" / "references.bib"
+    from .core.refs import get_ref_dir
+    return get_ref_dir(notes_dir) / "references.bib"
 
 
 def add_bib_entry(notes_dir: Path, citekey: str, result: CrossrefResult) -> None:

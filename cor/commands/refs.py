@@ -8,12 +8,12 @@ import click
 
 from ..exceptions import ValidationError, NotFoundError, AlreadyExistsError, ExternalServiceError
 from ..crossref import lookup_doi, extract_doi_from_url, CrossrefResult
-from ..bibtex import add_bib_entry, list_bib_entries, get_bib_entry
+from ..bibtex import add_bib_entry, list_bib_entries, get_bib_entry, remove_bib_entry
 from ..core.refs import (
-    RefMetadata,
     generate_citekey,
     get_existing_citekeys,
     get_ref_path,
+    get_ref_dir,
 )
 from ..utils import get_notes_dir, require_init, log_info, open_in_editor
 from ..completions import complete_ref
@@ -21,7 +21,7 @@ from ..completions import complete_ref
 
 def _ensure_ref_dir(notes_dir: Path) -> Path:
     """Ensure ref/ directory exists."""
-    ref_dir = notes_dir / "ref"
+    ref_dir = get_ref_dir(notes_dir)
     ref_dir.mkdir(exist_ok=True)
     return ref_dir
 
@@ -262,20 +262,25 @@ def delete(citekey: str, force: bool):
     """
     notes_dir = get_notes_dir()
     ref_path = get_ref_path(citekey, notes_dir)
+    entry = get_bib_entry(notes_dir, citekey)
 
-    if not ref_path.exists():
+    if not ref_path.exists() and not entry:
         raise NotFoundError(f"Reference not found: {citekey}")
 
     if not force:
-        from ..core.refs import Reference
-        ref = Reference.from_file(ref_path)
-        log_info(f"Delete reference: {ref.title}")
-        log_info(f"  Authors: {', '.join(ref.authors)}")
+        # Show details from the authoritative .bib entry for confirmation.
+        title = (entry.get("title") if entry else None) or citekey
+        authors_str = (entry.get("author") if entry else None) or "Unknown"
+        authors = [a.strip() for a in authors_str.split(" and ") if a.strip()]
+        log_info(f"Delete reference: {title}")
+        log_info(f"  Authors: {', '.join(authors) if authors else 'Unknown'}")
         if not click.confirm("Are you sure?"):
             log_info("Cancelled.")
             return
 
-    ref_path.unlink()
+    if ref_path.exists():
+        ref_path.unlink()
+    remove_bib_entry(notes_dir, citekey)
     log_info(f"Deleted: ref/{citekey}")
 
 

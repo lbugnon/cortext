@@ -11,23 +11,13 @@ from textual.containers import Horizontal
 from textual.suggester import Suggester
 from textual.widgets import Input, Static, Tree
 
+from ..schema import STATUS_SYMBOLS
+from .colors import STATUS_STYLES, STATUS_KEY_BINDINGS
 
+# key -> (status, symbol, color), derived so symbols stay sourced from schema.
 STATUS_KEYS: dict[str, tuple[str, str, str]] = {
-    "x": ("done", "[x]", "green"),
-    "o": ("blocked", "[o]", "red"),
-    ".": ("active", "[.]", "cyan"),
-    "/": ("waiting", "[/]", "yellow"),
-    "~": ("dropped", "[~]", "magenta"),
-    "backspace": ("todo", "[ ]", "white"),
-}
-
-STATUS_STYLES: dict[str, tuple[str, str]] = {
-    "done": ("[x]", "green"),
-    "blocked": ("[o]", "red"),
-    "active": ("[.]", "cyan"),
-    "waiting": ("[/]", "yellow"),
-    "dropped": ("[~]", "magenta"),
-    "todo": ("[ ]", "white"),
+    key: (status, STATUS_SYMBOLS[status], STATUS_STYLES[status][1])
+    for key, status in STATUS_KEY_BINDINGS.items()
 }
 
 _HELP = "x/o/./~/⌫:status  X/O:+note  n/N:new  m:move  d:delete  e:edit  j/k:nav  q:quit"
@@ -407,7 +397,7 @@ class ProjectTreeApp(App):
 
             symbol, _ = STATUS_STYLES.get(new_status, ("[ ]", "white"))
             # Escape markup characters in the symbol (e.g., [/] for waiting status)
-            escaped_symbol = symbol.replace("[", "\[")
+            escaped_symbol = symbol.replace("[", r"\[")
             self.notify(f"{escaped_symbol} {new_status}", timeout=1.5)
 
         except Exception as e:
