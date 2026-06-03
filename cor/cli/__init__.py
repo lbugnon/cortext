@@ -220,12 +220,11 @@ def _uninstall_pre_commit_hook() -> None:
 
 # Import and register all commands
 from .init import init, example_vault
-from .config import config_cmd, focus, inbox_cmd
+from .config import config_cmd, focus
 from .notes import new, edit, tag, delete, mark, due, expand, link
-from .maintenance import sync, maintenance, hooks
+from .maintenance import sync, maintenance
 from ..commands.refactor import rename, group
-from ..commands.process import process
-from ..commands.log import log
+from ..commands.inbox import inbox
 from ..commands.dependencies import depend
 from ..commands.refs import ref
 from ..commands.status import daily, projects, weekly, tree, status
@@ -239,7 +238,7 @@ cli.add_command(init)
 cli.add_command(example_vault)
 cli.add_command(config_cmd)
 cli.add_command(focus)
-cli.add_command(inbox_cmd)
+cli.add_command(inbox)
 cli.add_command(new)
 cli.add_command(edit)
 cli.add_command(tag)
@@ -251,12 +250,9 @@ cli.add_command(expand)
 cli.add_command(link)
 cli.add_command(sync)
 cli.add_command(maintenance)
-cli.add_command(hooks)
 cli.add_command(rename)
 cli.add_command(rename, name="move")  # Alias
 cli.add_command(group)
-cli.add_command(process)
-cli.add_command(log)
 cli.add_command(depend)
 cli.add_command(ref)
 cli.add_command(daily)

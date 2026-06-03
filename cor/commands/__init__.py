@@ -2,8 +2,7 @@
 
 from .status import daily, projects, weekly, tree, status
 from .refactor import rename, group
-from .process import process
-from .log import log
+from .inbox import inbox
 
 __all__ = [
     "daily",
@@ -13,6 +12,5 @@ __all__ = [
     "status",
     "rename",
     "group",
-    "process",
-    "log",
+    "inbox",
 ]

@@ -10,6 +10,10 @@ import frontmatter
 
 from ..exceptions import NotFoundError, ExternalServiceError
 from ..schema import DATE_TIME
+from ..config import get_remote_inbox
+from ..utils import get_notes_dir, require_init
+from .log import log as _inbox_add
+from .process import process as _inbox_process
 
 
 def _get_message_id(update: dict) -> int | None:
@@ -280,3 +284,58 @@ def pull_remote_inbox(
             )
 
     return len(messages_to_add)
+
+
+@click.group(name="inbox")
+def inbox():
+    """Capture and process backlog items (manual entries and Telegram).
+
+    \b
+    Subcommands:
+      add TEXT   Append a line to the backlog Inbox
+      pull       Pull messages from the configured Telegram bot
+      process    Interactively file backlog items into projects/tasks
+    """
+    pass
+
+
+@inbox.command(name="pull")
+@click.option("--full-sync", "full_sync", is_flag=True, help="Pull all messages including previously read ones")
+@click.option("--delete-after", "delete_after", is_flag=True, help="Delete messages from Telegram after pulling")
+@click.option("--dry-run", "dry_run", is_flag=True, help="Show what would be pulled without modifying backlog")
+@require_init
+def inbox_pull(full_sync: bool, delete_after: bool, dry_run: bool):
+    """Pull messages from the configured Telegram bot into the backlog.
+
+    Use --full-sync to pull all message history (not just unread).
+    Use --delete-after to clean up messages from Telegram after pulling.
+    """
+    bot_token = get_remote_inbox()
+    if not bot_token:
+        click.echo(click.style("Remote inbox not configured", fg="yellow"))
+        click.echo("Run: cor config inbox <bot-token>")
+        return
+
+    if dry_run:
+        test_telegram_connection(bot_token)
+        return
+
+    notes_dir = get_notes_dir()
+    try:
+        added = pull_remote_inbox(
+            notes_dir,
+            bot_token,
+            full_sync=full_sync,
+            delete_after_sync=delete_after,
+        )
+        if added:
+            click.echo(click.style(f"✓ Pulled {added} items from Telegram inbox", fg="green"))
+        else:
+            click.echo(click.style("No new messages to pull", fg="yellow"))
+    except click.ClickException as e:
+        click.echo(click.style(f"Error: {e.message}", fg="red"), err=True)
+
+
+# Reuse the standalone capture/processing commands as inbox subcommands.
+inbox.add_command(_inbox_add, name="add")
+inbox.add_command(_inbox_process, name="process")

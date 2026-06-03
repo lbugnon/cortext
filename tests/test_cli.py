@@ -477,8 +477,8 @@ class TestLog:
         """cor log should append bullet to backlog inbox."""
         monkeypatch.chdir(initialized_vault)
 
-        result = runner.invoke(cli, ["log", "Capture an idea"])
-        assert result.exit_code == 0, f"Log failed: {result.output}"
+        result = runner.invoke(cli, ["inbox", "add", "Capture an idea"])
+        assert result.exit_code == 0, f"inbox add failed: {result.output}"
 
         content = (initialized_vault / "backlog.md").read_text()
         assert "- Capture an idea" in content
@@ -497,8 +497,8 @@ modified: {today}
 # Backlog
 """)
 
-        result = runner.invoke(cli, ["log", "New backlog item"])
-        assert result.exit_code == 0, f"Log failed: {result.output}"
+        result = runner.invoke(cli, ["inbox", "add", "New backlog item"])
+        assert result.exit_code == 0, f"inbox add failed: {result.output}"
 
         content = backlog_path.read_text()
         assert "## Inbox" in content

@@ -283,10 +283,10 @@ def maintenance_sync(sync_all: bool):
         click.echo(click.style("\nDone!", fg="green"))
 
 
-@cli.group()
+@maintenance.group("hooks")
 def hooks():
     """Manage git hooks and shell completion.
-    
+
     Git hooks automatically update file metadata on commits.
     """
     pass

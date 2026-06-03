@@ -159,31 +159,33 @@ tags: [coding, urgent]
 | Command | Description |
 |---------|-------------|
 | `cor init` | Initialize vault (creates structure, initializes git, installs hooks) |
+| `cor example-vault` | Create a sample vault to explore features |
 | `cor new <type> <name>` | Create file from template (project, task, note) |
 | `cor expand <task>` | Expand task checklist into individual subtasks |
 | `cor edit <name>` | Open existing file in editor (use `-a` to include archived) |
-| `cor mark <name> <status>` | Change task status (todo, active, blocked, done, dropped) |
+| `cor delete <name>` (`del`) | Delete a file |
+| `cor mark <name> <status>` | Change task status (also parses `due`/`tag` from trailing text) |
+| `cor tag <name> <tags…>` | Add (or `-d` remove) tags on a note |
+| `cor due <name> <date…>` | Set (or `-d` clear) a due date using natural language |
+| `cor link <query>` | Print a `[Title](stem.md)` markdown link (for piping) |
+| `cor depend <add\|remove\|list> …` | Manage soft task/project dependencies |
 | `cor sync` | Commit all changes, pull, and push to remote (`--no-pull`, `--no-push`) |
-| `cor daily [tag]` | Show today's tasks; when `tag` is provided, only tasks matching the tag (by project name, task tags, or project tags) |
+| `cor daily [tag]` | Show today's tasks; optional `tag` filters by project/task/project tags |
 | `cor weekly` | Show this week's summary |
 | `cor projects` | List active projects with status and last activity (from children) |
-| `cor tree <project>` | Show task tree for a project with status symbols |
-| `cor review` | Interactive review of stale/blocked items |
-| `cor rename <old> <new>` | Rename project/task with all dependencies |
-| `cor move <old> <new>` | Alias of rename (conceptually better for moving groups/tasks) |
+| `cor status` | Vault statistics and overview |
+| `cor tree <project>` | Show task tree (`-i` for interactive vim-key navigation) |
+| `cor focus [project\|off]` | Set/show the focused project (defaults other commands to it) |
+| `cor rename <old> <new>` (`move`) | Rename/move project/task with all dependencies |
 | `cor group <project.group> <tasks>` | Group existing tasks under a new task group |
-| `cor process` | Process backlog items into projects |
-| `cor hooks install` | Install pre-commit hook and shell completion |
-| `cor hooks uninstall` | Remove git hooks |
-| `cor config vault <path>` | Set global vault path |
-| `cor config inbox <token>` | Configure Telegram bot for mobile inbox |
-| `cor config` | Show current configuration |
-| `cor inbox` | Test Telegram connection and show pending messages |
-| `cor calendar auth` | Authenticate with Google Calendar |
-| `cor calendar sync` | Sync due dates to Google Calendar |
-| `cor calendar status` | Check calendar authentication status |
-| `cor calendar logout` | Remove Google Calendar credentials |
+| `cor inbox add <text>` | Append a line to the backlog inbox |
+| `cor inbox pull` | Pull messages from the configured Telegram bot |
+| `cor inbox process` | Interactively file backlog items into projects |
+| `cor ref <add\|list\|show\|edit\|del\|search\|validate> …` | Manage bibliography references |
+| `cor config [vault\|inbox\|verbosity\|timezone] …` | Show or set configuration |
+| `cor calendar <auth\|sync\|status\|logout>` | Google Calendar integration (needs `cor-text[calendar]`) |
 | `cor maintenance sync` | Manually run archive/status sync |
+| `cor maintenance hooks <install\|uninstall>` | Install/remove the pre-commit hook and completion |
 | `cor search <query>` | Full-text content search (supports filters: `status:`, `#tag`, `project:`) |
 
 ### Bulk Operations
@@ -386,7 +388,7 @@ Capture notes from your phone by sending messages to a Telegram bot. Messages ar
 
 4. **Test the connection**:
    ```bash
-   cor inbox  # Shows pending messages
+   cor inbox pull --dry-run  # Show pending messages without modifying the backlog
    ```
 
 5. **Sync to pull messages**:
