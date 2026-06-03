@@ -12,11 +12,6 @@ import yaml
 from .exceptions import ConfigError
 
 
-def get_config_path() -> Path:
-    """Return the path to the config file."""
-    return _config_file()
-
-
 def _config_dir() -> Path:
     """Return the configuration directory (respects XDG_CONFIG_HOME)."""
     xdg = os.environ.get("XDG_CONFIG_HOME")

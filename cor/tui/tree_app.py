@@ -21,8 +21,6 @@ STATUS_KEYS: dict[str, tuple[str, str, str]] = {
     "backspace": ("todo", "[ ]", "white"),
 }
 
-STATUS_TO_KEY = {v[0]: k for k, v in STATUS_KEYS.items()}
-
 STATUS_STYLES: dict[str, tuple[str, str]] = {
     "done": ("[x]", "green"),
     "blocked": ("[o]", "red"),

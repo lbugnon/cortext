@@ -241,63 +241,6 @@ def lookup_doi(doi: str) -> Optional[CrossrefResult]:
         return None
 
 
-def search_crossref(query: str, limit: int = 10) -> list[CrossrefResult]:
-    """Search Crossref for papers matching query.
-
-    Args:
-        query: Search query string
-        limit: Maximum number of results
-
-    Returns:
-        List of CrossrefResult objects
-    """
-    try:
-        cr = Crossref()
-        results = cr.works(query=query, limit=limit)
-
-        if not results or "message" not in results:
-            return []
-
-        items = results["message"].get("items", [])
-
-        parsed = []
-        for item in items:
-            titles = item.get("title", [])
-            title = titles[0] if titles else "Untitled"
-
-            authors = [_format_author(a) for a in item.get("author", [])]
-            if not authors:
-                authors = ["Unknown"]
-
-            year = _extract_year(item)
-
-            containers = item.get("container-title", [])
-            journal = containers[0] if containers else None
-
-            cr_type = item.get("type", "misc")
-            entry_type = CROSSREF_TYPE_MAP.get(cr_type, "misc")
-
-            parsed.append(CrossrefResult(
-                title=title,
-                authors=authors,
-                year=year,
-                doi=item.get("DOI", ""),
-                journal=journal,
-                volume=item.get("volume"),
-                pages=item.get("page"),
-                publisher=item.get("publisher"),
-                abstract=_clean_abstract(item.get("abstract")),
-                entry_type=entry_type,
-                url=item.get("URL"),
-            ))
-
-        return parsed
-
-    except Exception as e:
-        print(f"Crossref search failed: {e}")
-        return []
-
-
 def extract_doi_from_url(url: str) -> Optional[str]:
     """Extract DOI or identifier from various URL/identifier formats.
 

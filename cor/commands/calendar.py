@@ -14,7 +14,7 @@ from typing import Optional
 import click
 
 from ..exceptions import ValidationError, ConfigError, ExternalServiceError
-from ..config import get_config_path, load_config, save_config, get_timezone
+from ..config import load_config, save_config, get_timezone
 from ..core.notes import find_notes, _date_has_time
 from ..utils import get_notes_dir, require_init
 

@@ -74,52 +74,6 @@ def get_bib_path(notes_dir: Path) -> Path:
     return notes_dir / "ref" / "references.bib"
 
 
-def read_bib_entries(bib_path: Path) -> dict[str, str]:
-    """Read .bib file and return dict of citekey -> entry string.
-
-    Uses bibtexparser for robust parsing, then re-serializes each entry.
-    """
-    if not bib_path.exists():
-        return {}
-
-    content = bib_path.read_text()
-    try:
-        db = bibtex_loads(content)
-    except Exception:
-        # Fallback to empty if parse fails
-        return {}
-
-    writer = BibTexWriter()
-    writer.indent = "  "
-    writer.order_entries_by = None
-
-    entries: dict[str, str] = {}
-    for entry in db.entries:
-        citekey = entry.get("ID")
-        if not citekey:
-            continue
-        single_db = BibDatabase()
-        single_db.entries = [entry]
-        entry_text = writer.write(single_db).strip()
-        entries[citekey] = entry_text
-
-    return entries
-
-
-def write_bib_file(bib_path: Path, entries: dict[str, str]) -> None:
-    """Write entries to .bib file."""
-    bib_path.parent.mkdir(exist_ok=True)
-
-    # Sort by citekey for consistent output
-    sorted_entries = [entries[k] for k in sorted(entries.keys())]
-    content = "\n\n".join(sorted_entries)
-
-    if content:
-        content += "\n"
-
-    bib_path.write_text(content)
-
-
 def add_bib_entry(notes_dir: Path, citekey: str, result: CrossrefResult) -> None:
     """Add or update an entry in references.bib using bibtexparser."""
     bib_path = get_bib_path(notes_dir)
@@ -170,18 +124,6 @@ def remove_bib_entry(notes_dir: Path, citekey: str) -> bool:
     content = writer.write(db)
     bib_path.write_text(content)
     return True
-
-
-def get_bib_citekeys(notes_dir: Path) -> set[str]:
-    """Get set of citekeys in references.bib."""
-    bib_path = get_bib_path(notes_dir)
-    if not bib_path.exists():
-        return set()
-    try:
-        db = bibtex_loads(bib_path.read_text())
-        return {e.get("ID") for e in getattr(db, "entries", []) if e.get("ID")}
-    except Exception:
-        return set()
 
 
 def has_doi_in_bib(notes_dir: Path, doi: str) -> Optional[str]:
