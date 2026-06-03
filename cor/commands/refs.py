@@ -280,10 +280,41 @@ def delete(citekey: str, force: bool):
 
 
 def _search_references(entries: list, query: str) -> list[tuple]:
+    """Rank bib entries by fuzzy relevance to a query.
+
+    Each entry is scored (0-100) against its citekey, author, title, year,
+    journal and abstract. Returns ``(entry, score)`` pairs sorted by descending
+    score, keeping substring hits and fuzzy matches at or above a relevance cut.
     """
-    """
-    return NotImplementedError()
-    
+    from rapidfuzz import fuzz
+
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+
+    scored = []
+    for e in entries:
+        haystack = " ".join(
+            str(e.get(field, ""))
+            for field in ("ID", "author", "title", "year", "journal", "abstract")
+        ).lower()
+        if not haystack.strip():
+            continue
+        if q in haystack:
+            # Exact (case-insensitive) substring hit.
+            score = 100
+        else:
+            # Fuzzy fallback for typos only — keep the bar high so unrelated
+            # entries (e.g. "attention" vs "fermentation") are not matched.
+            score = fuzz.token_set_ratio(q, haystack)
+            if score < 85:
+                continue
+        scored.append((e, score))
+
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored
+
+
 
 @click.command(short_help="Search references by text")
 @click.argument("query")

@@ -376,6 +376,6 @@ def example_vault(ctx):
     click.echo("\nExplore references:")
     click.echo("  cor ref list        # View all references")
     click.echo("  cor ref show vaswani2017attention")
-    click.echo("  [to be implemented] cor ref search transformer")
+    click.echo("  cor ref search transformer")
 
 

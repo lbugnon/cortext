@@ -796,12 +796,14 @@ class MaintenanceRunner:
             post['status'] = 'active'
 
         if not self.dry_run:
-            # Move file and write updated content
-            parent_path.unlink()
+            # Move file to the active location, writing updated content if it
+            # parsed. Write-then-unlink (or move) so the original is never lost
+            # when the parent can't be parsed.
             if post:
                 save_note(new_path, post)
+                parent_path.unlink()
             else:
-                shutil.copy(parent_path, new_path)
+                shutil.move(str(parent_path), str(new_path))
 
             # Update links inside the parent file
             self.update_links_in_file(new_path, to_archive=False)

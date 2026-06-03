@@ -337,3 +337,25 @@ class TestSyncResult:
         assert result.links_updated == []
         assert result.modified_dates_updated == []
         assert result.errors == {}
+
+
+class TestUnarchiveParseFailure:
+    """Regression: unarchiving a parent whose frontmatter can't be parsed must
+    relocate the file instead of crashing (previously it unlinked then copied
+    the already-deleted file)."""
+
+    def test_unparseable_parent_is_moved_not_lost(self, simple_vault):
+        # Malformed YAML frontmatter -> load_note() returns None
+        archived_parent = simple_vault / "archive" / "proj.md"
+        archived_parent.write_text("---\nstatus: [unclosed\n---\nbody\n")
+        (simple_vault / "proj.task.md").write_text(
+            "---\ntype: task\nstatus: active\nparent: proj\n---\n[< Proj](proj.md)\n"
+        )
+
+        runner = MaintenanceRunner(simple_vault)
+        result = runner.unarchive_parent_if_needed("proj.task.md")
+
+        assert result is not None
+        assert (simple_vault / "proj.md").exists()
+        assert not archived_parent.exists()
+        assert (simple_vault / "proj.md").read_text() == "---\nstatus: [unclosed\n---\nbody\n"

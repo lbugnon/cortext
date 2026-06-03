@@ -577,6 +577,17 @@ class TestParseNaturalLanguagePriority:
         """Test that priority keyword is case-insensitive."""
         text = "task PRIORITY HIGH"
         cleaned, due_date, tags, status, priority = parse_natural_language_text(text)
-        
+
         assert cleaned == "task"
         assert priority == "high"
+
+    def test_keywords_require_whitespace_separation(self):
+        """Keywords glued to a word are NOT treated as keywords.
+
+        Documents the parser contract: 'tag', 'due', etc. are only recognized
+        when whitespace-separated. 'tagurgent' must not produce a tag.
+        """
+        text = "do the thing tagurgent"
+        cleaned, due_date, tags, status, priority = parse_natural_language_text(text)
+        assert tags == []
+        assert "tagurgent" in cleaned

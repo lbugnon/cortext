@@ -28,18 +28,31 @@ except ImportError:
 # Google API scopes - need full calendar access to list/create calendars
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-# Default OAuth client configuration for Desktop app
-DEFAULT_CLIENT_CONFIG = {
-    "installed": {
-        # These will be populated when you set up the Google Cloud project
-        # See: https://console.cloud.google.com/apis/credentials
-        "client_id": "769575986616-uet5a3ch861jkspbr6tiuno1d913ju7n.apps.googleusercontent.com",  
-        "client_secret": "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", 
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": ["http://127.0.0.1"],
+def _default_client_config() -> dict:
+    """Build the OAuth client config from environment variables.
+
+    Credentials are never embedded in source. Set GOOGLE_CLIENT_ID and
+    GOOGLE_CLIENT_SECRET (from https://console.cloud.google.com/apis/credentials),
+    or pass --client-id/--client-secret to ``cor calendar auth``.
+    """
+    client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise ConfigError(
+            "Google Calendar requires OAuth credentials. Set the GOOGLE_CLIENT_ID and "
+            "GOOGLE_CLIENT_SECRET environment variables (create a Desktop OAuth client at "
+            "https://console.cloud.google.com/apis/credentials), or pass "
+            "--client-id/--client-secret to 'cor calendar auth'."
+        )
+    return {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://127.0.0.1"],
+        }
     }
-}
 
 
 def _get_credentials_file() -> Path:
@@ -199,7 +212,8 @@ def auth(client_id: Optional[str], client_secret: Optional[str]):
     Opens a browser for OAuth authentication. The refresh token is stored
     securely and used to maintain access without re-authentication.
     
-    By default, uses the built-in Cor OAuth app. To use your own:
+    Reads OAuth credentials from the GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+    environment variables. To pass them explicitly instead:
       cor calendar auth --client-id YOUR_ID --client-secret YOUR_SECRET
     """
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -221,8 +235,8 @@ def auth(client_id: Optional[str], client_secret: Optional[str]):
             "Please provide both --client-id and --client-secret, or neither to use defaults."
         )
     else:
-        # Use default embedded credentials
-        client_config = DEFAULT_CLIENT_CONFIG
+        # Use credentials supplied via environment variables
+        client_config = _default_client_config()
     
     # Run OAuth flow
     flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
