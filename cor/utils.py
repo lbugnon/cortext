@@ -301,6 +301,11 @@ def add_task_to_project(project_path: Path, task_name: str, task_filename: str):
     content = project_path.read_text()
     task_entry = f"- [ ] [{format_title(task_name)}]({task_filename}.md)"
 
+    # Idempotent: don't add a second entry if this task is already linked
+    # (link may carry an archive/ or ../ prefix).
+    if re.search(rf'\]\((?:archive/|\.\./)?{re.escape(task_filename)}\.md\)', content):
+        return
+
     # Find Tasks section and add entry
     if "## Tasks" in content:
         lines = content.split("\n")

@@ -367,6 +367,15 @@ class MaintenanceRunner:
             if self.update_modified_date(filepath):
                 result.modified_dates_updated.append(filepath)
 
+        # Self-heal stale link prefixes (archive/, ../) so that links resolve
+        # to where their targets actually live, before validation rejects them.
+        for filepath in staged_files:
+            path = Path(filepath)
+            if not path.is_absolute():
+                path = self.find_file_in_notes(Path(filepath).name) or (self.notes_dir / filepath)
+            if path.exists() and self.normalize_link_prefixes(path):
+                result.links_updated.append(str(path))
+
         # === VALIDATE BEFORE ARCHIVE/UNARCHIVE ===
         # Validate early to prevent archiving invalid state changes
         # (e.g., marking a group as done with incomplete children)
@@ -698,6 +707,62 @@ class MaintenanceRunner:
 
         return False
 
+    def normalize_link_prefixes(self, filepath: Path) -> bool:
+        """Rewrite internal link prefixes to match where targets actually live.
+
+        The correct prefix for an internal link depends only on whether the
+        source file and the target file are in archive/:
+
+            source active,  target active   -> bare      (target.md)
+            source active,  target archived -> archive/   (archive/target.md)
+            source archived, target active  -> ../        (../target.md)
+            source archived, target archived -> bare      (target.md)
+
+        Incremental archive/unarchive can leave stale prefixes (e.g. a child
+        archived before its parent keeps a ../ link that later resolves to a
+        missing active file, or sibling links keep an archive/ prefix that
+        resolves to archive/archive/...). This self-heals all of them. Links
+        whose target does not exist in either location are left untouched so
+        validation can still report genuinely broken links.
+        """
+        content = filepath.read_text()
+        source_in_archive = self.archive_dir in filepath.parents
+
+        def fix(match):
+            prefix, target, suffix = match.group(1), match.group(2), match.group(3)
+            if target.startswith(LinkPatterns.EXTERNAL_PREFIXES):
+                return match.group(0)
+            # Only normalize note links; never touch image/asset/other paths.
+            if not target.endswith('.md'):
+                return match.group(0)
+
+            if target.startswith('../'):
+                bare = target[3:]
+            elif target.startswith('archive/'):
+                bare = target[len('archive/'):]
+            else:
+                bare = target
+
+            target_active = (self.notes_dir / bare).exists()
+            target_archived = (self.archive_dir / bare).exists()
+            if not target_active and not target_archived:
+                return match.group(0)  # genuinely missing — leave for validation
+
+            if source_in_archive:
+                correct = bare if target_archived else f"../{bare}"
+            else:
+                correct = f"archive/{bare}" if target_archived else bare
+
+            return f"{prefix}{correct}{suffix}"
+
+        new_content = LinkPatterns.LINK_CAPTURE.sub(fix, content)
+
+        if new_content != content:
+            if not self.dry_run:
+                filepath.write_text(new_content)
+            return True
+        return False
+
     def update_links_in_parent(self, task_filename: str, to_archive: bool) -> list[str]:
         """Update links in parent file when task is archived or unarchived."""
         updated = []
@@ -711,9 +776,18 @@ class MaintenanceRunner:
 
         parent_content = parent_path.read_text()
 
+        # If the parent is itself in archive/, parent and task are siblings in
+        # the same directory: links must stay bare (no archive/ prefix), else
+        # they resolve to archive/archive/... relative to the parent file.
+        parent_in_archive = self.archive_dir in parent_path.parents
+
         if to_archive:
-            pattern = rf"(\[[^\]]+\]\()({re.escape(task_filename)}\.md)(\))"
-            replacement = rf"\g<1>archive/{task_filename}.md\g<3>"
+            if parent_in_archive:
+                pattern = rf"(\[[^\]]+\]\()(?:archive/)?({re.escape(task_filename)}\.md)(\))"
+                replacement = rf"\g<1>{task_filename}.md\g<3>"
+            else:
+                pattern = rf"(\[[^\]]+\]\()({re.escape(task_filename)}\.md)(\))"
+                replacement = rf"\g<1>archive/{task_filename}.md\g<3>"
         else:
             pattern = rf"(\[[^\]]+\]\()archive/({re.escape(task_filename)}\.md)(\))"
             replacement = rf"\g<1>{task_filename}.md\g<3>"
@@ -961,14 +1035,29 @@ class MaintenanceRunner:
                             task_title = get_title_from_file(renamed_file_path)
                             checkbox = get_status_symbol(task_status)
                             
-                            # Determine if file is in archive
+                            # Determine if file is in archive. Only add the
+                            # archive/ prefix when the parent receiving the link
+                            # is active; if the parent is itself archived they
+                            # are siblings and the link must stay bare.
                             is_archived = 'archive/' in new_path or str(self.archive_dir) in str(renamed_file_path)
-                            link_target = f"archive/{new_name}.md" if is_archived else f"{new_name}.md"
+                            parent_in_archive = self.archive_dir in new_parent_path.parents
+                            if is_archived and not parent_in_archive:
+                                link_target = f"archive/{new_name}.md"
+                            else:
+                                link_target = f"{new_name}.md"
                             task_entry = f"- {checkbox} [{task_title}]({link_target})"
-                            
+
                             content = new_parent_path.read_text()
+                            # Idempotent: skip if this task is already linked
+                            # in the parent (avoids duplicate task entries).
+                            already_linked = re.search(
+                                rf'\]\((?:archive/|\.\./)?{re.escape(new_name)}\.md\)',
+                                content,
+                            )
                             # Add to Tasks section
-                            if "## Tasks" in content:
+                            if already_linked:
+                                pass
+                            elif "## Tasks" in content:
                                 lines = content.split("\n")
                                 new_lines = []
                                 in_tasks = False
@@ -1300,7 +1389,7 @@ class MaintenanceRunner:
 
             # Apply all task updates to this parent
             for task_stem, checkbox in tasks:
-                pattern = rf"(- )\[[x .o~]\]( \[[^\]]+\]\()(archive/)?{re.escape(task_stem)}\.md(\))"
+                pattern = rf"(- )\[[x .o~/]\]( \[[^\]]+\]\()(archive/)?{re.escape(task_stem)}\.md(\))"
                 new_content = re.sub(
                     pattern,
                     rf"\g<1>{checkbox}\g<2>\g<3>{task_stem}.md\g<4>",
@@ -1319,7 +1408,7 @@ class MaintenanceRunner:
         content = parent_path.read_text()
 
         task_pattern = re.compile(
-            r'^(- \[([x .o~])\] \[[^\]]+\]\((?:archive/)?([^\)]+)\))$',
+            r'^(- \[([x .o~/])\] \[[^\]]+\]\((?:archive/)?([^\)]+)\))$',
             re.MULTILINE
         )
 
@@ -1327,13 +1416,23 @@ class MaintenanceRunner:
         if len(matches) < 2:
             return False
 
-        status_order = {'o': 0, '.': 1, ' ': 2, 'x': 3, '~': 4}
+        status_order = {'o': 0, '.': 1, '/': 1, ' ': 2, 'x': 3, '~': 4}
 
         tasks = []
+        seen_targets = set()
+        had_duplicates = False
         for match in matches:
             line = match.group(1)
             checkbox = match.group(2)
             task_name = match.group(3)
+            # Dedup by normalized target (ignore archive/ and ../ prefixes):
+            # the same task may be listed multiple times after repeated
+            # rename/sync runs. Keep the first occurrence only.
+            target_key = task_name.replace('archive/', '').replace('../', '')
+            if target_key in seen_targets:
+                had_duplicates = True
+                continue
+            seen_targets.add(target_key)
             tasks.append({
                 'line': line,
                 'checkbox': checkbox,
@@ -1347,8 +1446,10 @@ class MaintenanceRunner:
         has_active = any(t['order'] < 3 for t in tasks)
         has_done = any(t['order'] >= 3 for t in tasks)
 
-        first_task_start = tasks[0]['start']
-        last_task_end = tasks[-1]['end']
+        # Span over ALL original matches (not just the deduped list) so that
+        # trailing duplicate lines are absorbed into the rewritten block.
+        first_task_start = matches[0].start()
+        last_task_end = matches[-1].end()
 
         task_block = content[first_task_start:last_task_end]
         has_separator = separator in task_block
@@ -1360,7 +1461,7 @@ class MaintenanceRunner:
 
         needs_separator = has_active and has_done and not has_separator
 
-        if is_sorted and not needs_separator:
+        if is_sorted and not needs_separator and not had_duplicates:
             return False
 
         sorted_tasks = sorted(tasks, key=lambda t: (t['order'], t['name']))
