@@ -359,3 +359,218 @@ class TestUnarchiveParseFailure:
         assert (simple_vault / "proj.md").exists()
         assert not archived_parent.exists()
         assert (simple_vault / "proj.md").read_text() == "---\nstatus: [unclosed\n---\nbody\n"
+
+class TestArchivedParentLinks:
+    """Regression tests for archive/ prefix on sibling links.
+
+    When a task whose parent is itself in archive/ gets archived, the link
+    in the parent must stay a bare sibling reference. Adding an archive/
+    prefix makes it resolve to archive/archive/... relative to the parent
+    file (see runner.update_links_in_parent).
+    """
+
+    def test_archived_parent_keeps_bare_sibling_link(self, simple_vault):
+        archive = simple_vault / "archive"
+
+        parent = archive / "proj.group.md"
+        parent.write_text("""---
+type: task
+status: done
+created: 2024-01-01
+parent: proj
+---
+# Group
+
+## Tasks
+- [ ] [Child](proj.group.child.md)
+""")
+
+        child = archive / "proj.group.child.md"
+        child.write_text("""---
+type: task
+status: done
+created: 2024-01-01
+parent: proj.group
+---
+# Child
+""")
+
+        runner = MaintenanceRunner(simple_vault)
+        runner.update_links_in_parent("proj.group.child", to_archive=True)
+
+        content = parent.read_text()
+        assert "(proj.group.child.md)" in content
+        assert "archive/" not in content
+
+    def test_active_parent_gets_archive_prefix(self, vault_with_project):
+        vault = vault_with_project['vault']
+        runner = MaintenanceRunner(vault)
+        runner.update_links_in_parent("myproject.task1", to_archive=True)
+
+        content = vault_with_project['project'].read_text()
+        assert "(archive/myproject.task1.md)" in content
+
+
+class TestSortTasksDedup:
+    """Regression tests: sort_tasks_in_parent removes duplicate task entries."""
+
+    def _vault(self, tmp_path):
+        vault = tmp_path / "notes"
+        vault.mkdir()
+        (vault / "archive").mkdir()
+        return vault
+
+    def test_dedup_removes_repeated_entries(self, tmp_path):
+        vault = self._vault(tmp_path)
+        parent = vault / "proj.md"
+        parent.write_text("""---
+type: project
+status: active
+---
+# Proj
+
+## Tasks
+- [x] [A](proj.a.md)
+- [x] [A](proj.a.md)
+- [x] [A](proj.a.md)
+- [ ] [B](proj.b.md)
+- [ ] [B](proj.b.md)
+""")
+        runner = MaintenanceRunner(vault)
+        changed = runner.sort_tasks_in_parent(parent)
+
+        assert changed is True
+        content = parent.read_text()
+        assert content.count("(proj.a.md)") == 1
+        assert content.count("(proj.b.md)") == 1
+
+    def test_dedup_ignores_archive_prefix(self, tmp_path):
+        vault = self._vault(tmp_path)
+        parent = vault / "proj.md"
+        parent.write_text("""---
+type: project
+status: active
+---
+# Proj
+
+## Tasks
+- [x] [A](archive/proj.a.md)
+- [x] [A](proj.a.md)
+- [ ] [B](proj.b.md)
+""")
+        runner = MaintenanceRunner(vault)
+        changed = runner.sort_tasks_in_parent(parent)
+
+        assert changed is True
+        content = parent.read_text()
+        # Both proj.a links collapse to a single entry (first occurrence kept)
+        assert content.count("proj.a.md)") == 1
+
+    def test_no_duplicates_unsorted_only(self, tmp_path):
+        vault = self._vault(tmp_path)
+        parent = vault / "proj.md"
+        parent.write_text("""---
+type: project
+status: active
+---
+# Proj
+
+## Tasks
+- [x] [A](proj.a.md)
+- [ ] [B](proj.b.md)
+""")
+        runner = MaintenanceRunner(vault)
+        # Already distinct; should still produce single entries after sort
+        runner.sort_tasks_in_parent(parent)
+        content = parent.read_text()
+        assert content.count("(proj.a.md)") == 1
+        assert content.count("(proj.b.md)") == 1
+
+
+class TestWaitingStatusInTaskList:
+    """Regression: '/' (waiting) status entries must be recognized by the
+    task-list regexes used for sort/dedup/checkbox-sync."""
+
+    def test_waiting_entry_is_sorted_and_deduped(self, tmp_path):
+        vault = tmp_path / "notes"
+        vault.mkdir()
+        (vault / "archive").mkdir()
+        parent = vault / "proj.md"
+        parent.write_text("""---
+type: project
+status: active
+---
+# Proj
+
+## Tasks
+- [/] [A](proj.a.md)
+- [x] [A](proj.a.md)
+- [x] [B](proj.b.md)
+""")
+        runner = MaintenanceRunner(vault)
+        changed = runner.sort_tasks_in_parent(parent)
+
+        assert changed is True
+        content = parent.read_text()
+        # The duplicate A (waiting + done) collapses to one entry
+        assert content.count("(proj.a.md)") == 1
+        # Waiting sorts with the active group, ahead of done tasks
+        assert content.index("(proj.a.md)") < content.index("(proj.b.md)")
+
+
+class TestNormalizeLinkPrefixes:
+    """Tests for self-healing link-prefix normalization."""
+
+    def _vault(self, tmp_path):
+        vault = tmp_path / "notes"
+        vault.mkdir()
+        (vault / "archive").mkdir()
+        return vault
+
+    def test_archived_child_to_archived_parent_is_bare(self, tmp_path):
+        vault = self._vault(tmp_path)
+        (vault / "archive" / "proj.md").write_text("---\ntype: task\n---\n# P\n")
+        child = vault / "archive" / "proj.child.md"
+        child.write_text("---\ntype: task\n---\n# C\n[< P](../proj.md)\n")
+
+        runner = MaintenanceRunner(vault)
+        assert runner.normalize_link_prefixes(child) is True
+        assert "[< P](proj.md)" in child.read_text()
+
+    def test_active_source_to_archived_target_gets_archive_prefix(self, tmp_path):
+        vault = self._vault(tmp_path)
+        (vault / "archive" / "proj.child.md").write_text("---\ntype: task\n---\n# C\n")
+        parent = vault / "proj.md"
+        parent.write_text("---\ntype: project\n---\n# P\n## Tasks\n- [x] [C](proj.child.md)\n")
+
+        runner = MaintenanceRunner(vault)
+        assert runner.normalize_link_prefixes(parent) is True
+        assert "(archive/proj.child.md)" in parent.read_text()
+
+    def test_archived_source_to_active_target_gets_parent_prefix(self, tmp_path):
+        vault = self._vault(tmp_path)
+        (vault / "proj.md").write_text("---\ntype: project\n---\n# P\n")
+        child = vault / "archive" / "proj.child.md"
+        child.write_text("---\ntype: task\n---\n# C\n[< P](proj.md)\n")
+
+        runner = MaintenanceRunner(vault)
+        assert runner.normalize_link_prefixes(child) is True
+        assert "[< P](../proj.md)" in child.read_text()
+
+    def test_missing_target_left_untouched(self, tmp_path):
+        vault = self._vault(tmp_path)
+        note = vault / "proj.md"
+        note.write_text("---\ntype: project\n---\n# P\n[x](archive/nonexistent.md)\n")
+
+        runner = MaintenanceRunner(vault)
+        assert runner.normalize_link_prefixes(note) is False
+        assert "(archive/nonexistent.md)" in note.read_text()
+
+    def test_already_correct_is_noop(self, tmp_path):
+        vault = self._vault(tmp_path)
+        (vault / "proj.child.md").write_text("---\ntype: task\n---\n# C\n")
+        parent = vault / "proj.md"
+        parent.write_text("---\ntype: project\n---\n# P\n## Tasks\n- [ ] [C](proj.child.md)\n")
+
+        runner = MaintenanceRunner(vault)
+        assert runner.normalize_link_prefixes(parent) is False

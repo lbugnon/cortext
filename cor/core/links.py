@@ -43,13 +43,13 @@ class LinkPatterns:
     # Task entry patterns (for task lists in parents)
     # Matches: - [x] [Title](target) or - [x] [Title](archive/target)
     TASK_ENTRY = re.compile(
-        r'^(- \[([x .o~])\] \[[^\]]+\]\((?:archive/)?([^\)]+)\))$',
+        r'^(- \[([x .o~/])\] \[[^\]]+\]\((?:archive/)?([^\)]+)\))$',
         re.MULTILINE
     )
 
     # Task entry with capture groups for modification
     TASK_ENTRY_DETAILED = re.compile(
-        r"(- )\[[x .o~]\]( \[[^\]]+\]\()(archive/)?([^\)]+)(\))",
+        r"(- )\[[x .o~/]\]( \[[^\]]+\]\()(archive/)?([^\)]+)(\))",
         re.MULTILINE
     )
 
@@ -277,7 +277,7 @@ class LinkManager:
         Returns:
             Updated content
         """
-        pattern = rf"(- )\[[x .o~]\]( \[[^\]]+\]\()(archive/)?{re.escape(task_stem)}\.md(\))"
+        pattern = rf"(- )\[[x .o~/]\]( \[[^\]]+\]\()(archive/)?{re.escape(task_stem)}\.md(\))"
         replacement = rf"\g<1>[{new_checkbox}]\g<2>\g<3>{task_stem}.md\g<4>"
         return re.sub(pattern, replacement, content, flags=re.MULTILINE)
 
