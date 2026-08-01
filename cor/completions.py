@@ -14,8 +14,10 @@ from .utils import (
 )
 from .search.completion import complete_files_with_fuzzy, complete_filtered_with_fuzzy
 from .config import get_focused_project
-from bibtexparser import loads as bibtex_loads
-from .bibtex import get_bib_path
+
+# NOTE: bibtexparser and .bibtex are imported lazily inside complete_ref().
+# .bibtex pulls in .crossref -> habanero -> httpx -> rich, ~340ms, and this
+# module is imported by every `cor` command for its shell completions.
 
 
 def complete_ref(ctx, param, incomplete: str) -> list:
@@ -25,7 +27,9 @@ def complete_ref(ctx, param, incomplete: str) -> list:
     """
     from click.shell_completion import CompletionItem
     from .search.fuzzy import fuzzy_match
-    
+    from bibtexparser import loads as bibtex_loads
+    from .bibtex import get_bib_path
+
     notes_dir = get_notes_dir()
     bib_path = get_bib_path(notes_dir)
     if not bib_path.exists():
@@ -182,6 +186,88 @@ def complete_project(ctx, param, incomplete: str) -> list:
         fuzzy_match_fn=fuzzy_match,
         help_text="Project {item}"
     )
+
+
+def _completion_context_values(ctx) -> dict:
+    """Best-effort values of the arguments already typed, during completion.
+
+    `ctx.params` is authoritative once parsing succeeds -- which is the case
+    for `cor rel add <note> <TAB>`, where `note` and any already-typed
+    `targets` are both present.
+
+    It is empty when an option is left dangling: for `cor new project foo -c
+    <TAB>` click aborts on the value-less `-c` and leaves every argument None.
+    The raw tokens survive in `ctx.args` though, so map them back onto the
+    command's Arguments in declaration order.
+    """
+    import click
+
+    values = {k: v for k, v in ctx.params.items() if v}
+
+    leftovers = [a for a in (getattr(ctx, "args", None) or []) if not a.startswith("-")]
+    if leftovers:
+        argnames = [p.name for p in ctx.command.params if isinstance(p, click.Argument)]
+        for name, token in zip(argnames, leftovers):
+            values.setdefault(name, token)
+
+    return values
+
+
+def _already_referenced(ctx) -> set:
+    """Stems that must not be offered again: the subject and prior targets.
+
+    A note cannot relate to itself, and repeating a target it already has is
+    a no-op.
+    """
+    values = _completion_context_values(ctx)
+
+    taken = set()
+    for key in ("name", "note"):
+        if isinstance(values.get(key), str):
+            taken.add(values[key])
+    for key in ("targets", "continues"):
+        value = values.get(key)
+        if isinstance(value, (list, tuple)):
+            taken.update(str(v) for v in value)
+
+    return taken
+
+
+def complete_predecessor_project(ctx, param, incomplete: str) -> list:
+    """Shell completion for `continues` predecessors: projects, archive included.
+
+    Distinct from complete_existing_name, which gates archived results on an
+    `--archived` flag that `cor new` does not have. A project you are
+    continuing has almost always been closed, so it lives in archive/ and would
+    never be offered. Archived entries are labelled so the two are
+    distinguishable in the list.
+    """
+    from .core.files import FileIterator
+    from .search import fuzzy_match
+
+    notes_dir = get_notes_dir()
+    if not notes_dir.exists():
+        return []
+
+    iterator = FileIterator(notes_dir)
+    active = set(iterator.get_project_stems(include_archive=False))
+    taken = _already_referenced(ctx)
+    candidates = [
+        p for p in iterator.get_project_stems(include_archive=True) if p not in taken
+    ]
+
+    matches = [p for p in candidates if p.startswith(incomplete)]
+    if not matches:
+        matches = [
+            stem for stem, _archived, _score in fuzzy_match(
+                incomplete, [(p, p not in active) for p in candidates]
+            )
+        ] if incomplete else candidates
+
+    return [
+        CompletionItem(p, help="Project" if p in active else "Archived project")
+        for p in matches
+    ]
 
 
 def complete_existing_name(ctx, param, incomplete: str) -> list:
@@ -401,3 +487,37 @@ def complete_new_parent(ctx, param, incomplete: str) -> list:
             ]
 
     return []
+
+
+def complete_relation_target(ctx, param, incomplete: str) -> list:
+    """Shell completion for `cor rel` targets, archive always included.
+
+    Relation targets are routinely archived (that is the whole point of
+    `continues`), so unlike complete_existing_name this never gates on an
+    `--archived` flag. When `--as continues` has already been typed the list
+    narrows to projects, since that relation is project-only.
+    """
+    if ctx.params.get("field") == "continues":
+        return complete_predecessor_project(ctx, param, incomplete)
+
+    from .core.files import FileIterator
+
+    notes_dir = get_notes_dir()
+    if not notes_dir.exists():
+        return []
+
+    iterator = FileIterator(notes_dir)
+    active = set(iterator.get_all_stems(include_archive=False))
+    taken = _already_referenced(ctx)
+    candidates = [
+        s for s in iterator.get_all_stems(include_archive=True) if s not in taken
+    ]
+
+    matches = [s for s in candidates if s.startswith(incomplete)] or (
+        candidates if not incomplete else []
+    )
+
+    return [
+        CompletionItem(s, help=f"{s}.md" if s in active else f"archive/{s}.md")
+        for s in matches
+    ]

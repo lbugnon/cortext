@@ -18,6 +18,7 @@ from ..schema import VALID_PRIORITY, VALID_PROJECT_STATUS, VALID_TASK_STATUS, ST
 from ..core.links import LinkManager, LinkPatterns
 from ..core.archive import ArchiveManager
 from ..core.files import FileIterator, NoteFileManager
+from ..dependencies import RELATION_FIELDS
 
 
 @dataclass
@@ -34,6 +35,7 @@ class SyncResult:
     deleted_links_removed: list[str] = field(default_factory=list)
     dependencies_updated: list[str] = field(default_factory=list)
     errors: dict[str, list[str]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 # --- Static helper functions ---
@@ -234,6 +236,39 @@ def validate_frontmatter(filepath: str, notes_dir: Path) -> list[str]:
             f"Valid: {', '.join(sorted(VALID_PRIORITY))}"
         )
 
+    # Validate relation targets. These hold bare stems and are hand-editable,
+    # so a typo would otherwise sit there silently. Archived targets are legal
+    # (a continued project's predecessor normally lives in archive/).
+    stem = path.stem
+    for field, allowed_types in RELATION_FIELDS.items():
+        targets = meta.get(field)
+        if isinstance(targets, str):
+            targets = [targets]
+        if not targets:
+            continue
+
+        if note_type and note_type not in allowed_types:
+            errors.append(
+                f"'{field}' is not valid on a {note_type} note. "
+                f"Valid types: {', '.join(allowed_types)}"
+            )
+            continue
+
+        for target in targets:
+            if target == stem:
+                errors.append(f"'{field}' points at itself: {stem}")
+                continue
+            if "/" in str(target) or str(target).endswith(".md"):
+                errors.append(
+                    f"'{field}' entry '{target}' must be a bare stem, not a path"
+                )
+                continue
+            if not (
+                (notes_dir / f"{target}.md").exists()
+                or (notes_dir / "archive" / f"{target}.md").exists()
+            ):
+                errors.append(f"'{field}' target does not exist: {target}")
+
     return errors
 
 
@@ -375,6 +410,11 @@ class MaintenanceRunner:
                 path = self.find_file_in_notes(Path(filepath).name) or (self.notes_dir / filepath)
             if path.exists() and self.normalize_link_prefixes(path):
                 result.links_updated.append(str(path))
+
+        # Surface stems that exist both active and archived. Everything keyed
+        # by stem then becomes ambiguous: checkbox sync picks whichever copy it
+        # finds first, so a parent can show the status of the wrong file.
+        result.warnings.extend(self.check_duplicate_stems())
 
         # === VALIDATE BEFORE ARCHIVE/UNARCHIVE ===
         # Validate early to prevent archiving invalid state changes
@@ -894,7 +934,12 @@ class MaintenanceRunner:
         return (str(parent_path), str(new_path))
 
     def update_dependencies_on_rename(self, old_stem: str, new_stem: str) -> list[str]:
-        """Update requires fields when a task/project is renamed.
+        """Update relation fields when a task/project is renamed.
+
+        Covers every stored relation (`requires`, `continues`, `related`), not
+        just dependencies - they all hold bare stems, so a rename invalidates
+        them identically. Reverse directions are computed rather than stored,
+        so there is nothing else to fix up.
 
         Args:
             old_stem: Old task/project stem
@@ -903,33 +948,13 @@ class MaintenanceRunner:
         Returns:
             List of files that were updated
         """
-        updated = []
-
-        # Find all notes that require the renamed note
-        for search_dir in [self.notes_dir, self.archive_dir]:
-            if not search_dir.exists():
-                continue
-
-            for note_path in search_dir.glob("*.md"):
-                post = load_note(note_path)
-                if not post:
-                    continue
-
-                requires = post.get("requires", [])
-                if old_stem in requires:
-                    # Update requirement
-                    new_requires = [new_stem if r == old_stem else r for r in requires]
-                    post["requires"] = new_requires
-
-                    if not self.dry_run:
-                        save_note(note_path, post)
-
-                    updated.append(str(note_path))
-
-        return updated
+        return self._rewrite_relation_stems(
+            lambda stems: [new_stem if s == old_stem else s for s in stems],
+            old_stem,
+        )
 
     def remove_dependencies_on_delete(self, deleted_stem: str) -> list[str]:
-        """Remove requires references when a task/project is deleted.
+        """Remove relation references when a task/project is deleted.
 
         Args:
             deleted_stem: Stem of deleted task/project
@@ -937,9 +962,56 @@ class MaintenanceRunner:
         Returns:
             List of files that were updated
         """
+        return self._rewrite_relation_stems(
+            lambda stems: [s for s in stems if s != deleted_stem],
+            deleted_stem,
+        )
+
+    def check_duplicate_stems(self) -> list[str]:
+        """Report stems that exist both in the vault root and in archive/.
+
+        Cor identifies notes by stem, so a duplicate makes every stem lookup
+        ambiguous. In practice the parent's checkbox ends up reflecting
+        whichever copy was found first: a project showed `[/]` (waiting) for a
+        link pointing at `archive/<stem>.md`, because an active file with the
+        same stem had `status: waiting` while the archived one was `done`.
+
+        Reported rather than auto-resolved - which copy is authoritative is a
+        judgement call about the user's content.
+
+        Returns:
+            Human-readable warning strings, one per duplicated stem
+        """
+        if not self.archive_dir.exists():
+            return []
+
+        active = {
+            p.stem for p in self.notes_dir.glob("*.md")
+            if p.stem != "backlog" and not p.name.startswith(".")
+        }
+        warnings = []
+        for path in sorted(self.archive_dir.glob("*.md")):
+            if path.stem in active:
+                warnings.append(
+                    f"Duplicate stem '{path.stem}': exists both as "
+                    f"{path.stem}.md and archive/{path.stem}.md. "
+                    f"Stem lookups are ambiguous until one is removed or renamed."
+                )
+        return warnings
+
+    def _rewrite_relation_stems(self, transform, target_stem: str) -> list[str]:
+        """Apply ``transform`` to every relation list mentioning ``target_stem``.
+
+        Args:
+            transform: Callable taking the current stem list and returning the
+                replacement list
+            target_stem: Stem to look for; files not mentioning it are untouched
+
+        Returns:
+            List of files that were updated
+        """
         updated = []
 
-        # Find all notes that require the deleted note
         for search_dir in [self.notes_dir, self.archive_dir]:
             if not search_dir.exists():
                 continue
@@ -949,15 +1021,21 @@ class MaintenanceRunner:
                 if not post:
                     continue
 
-                requires = post.get("requires", [])
-                if deleted_stem in requires:
-                    # Remove requirement
-                    new_requires = [r for r in requires if r != deleted_stem]
-                    post["requires"] = new_requires
+                changed = False
+                for field in RELATION_FIELDS:
+                    stems = post.get(field)
+                    # Tolerate a hand-written scalar (`continues: foo`).
+                    if isinstance(stems, str):
+                        stems = [stems]
+                    if not stems or target_stem not in stems:
+                        continue
 
+                    post[field] = transform(list(stems))
+                    changed = True
+
+                if changed:
                     if not self.dry_run:
                         save_note(note_path, post)
-
                     updated.append(str(note_path))
 
         return updated
@@ -1178,8 +1256,16 @@ class MaintenanceRunner:
 
         for filepath in deleted_files:
             deleted_name = Path(filepath).stem
-            parent_name = get_parent_name(filepath)
 
+            # Prune relations first. This must not be gated on having a parent:
+            # a top-level project has none, and skipping it left dangling
+            # requires/continues/related entries pointing at a deleted note.
+            updated_deps = self.remove_dependencies_on_delete(deleted_name)
+            for dep_file in updated_deps:
+                if dep_file not in updated:
+                    updated.append(dep_file)
+
+            parent_name = get_parent_name(filepath)
             if not parent_name:
                 continue
 
@@ -1198,12 +1284,6 @@ class MaintenanceRunner:
                     parent_path.write_text(new_content)
                 if str(parent_path) not in updated:
                     updated.append(str(parent_path))
-
-            # Remove dependencies
-            updated_deps = self.remove_dependencies_on_delete(deleted_name)
-            for dep_file in updated_deps:
-                if dep_file not in updated:
-                    updated.append(dep_file)
 
         return updated
 

@@ -304,12 +304,12 @@ def sync(calendar: str):
     
     notes_dir = get_notes_dir()
     
-    # Find tasks with due dates
+    # Find tasks and projects with due dates
     notes = find_notes(notes_dir)
     tasks_to_sync = [
         n for n in notes
-        if n.note_type == "task" 
-        and n.due 
+        if n.note_type in ("task", "project")
+        and n.due
         and n.status not in ("done", "dropped")
     ]
     

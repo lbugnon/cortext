@@ -50,8 +50,11 @@ def _run_ripgrep(
 
     # Build search paths and exclusions
     if not include_archived:
-        # Exclude archive directory
-        cmd.extend(["--glob", "!archive/**"])
+        # Exclude archive directory. The leading `**/` is required: notes_dir is
+        # passed to rg as an absolute path, so candidates look like
+        # /home/user/notes/archive/foo.md and a bare `archive/**` (which anchors
+        # at the start of the path) would never match.
+        cmd.extend(["--glob", "!**/archive/**"])
 
     # Always search notes_dir (which includes archive if include_archived=True)
     cmd.extend([query, str(notes_dir)])
@@ -241,9 +244,11 @@ def filter_matches(
             match_ok = False
 
         if "project" in filters:
-            # Check if file belongs to project (filename starts with project.)
+            # Check if file belongs to project: either a descendant
+            # (project.task.md) or the project file itself (project.md).
             project = filters["project"]
-            if not match.file.stem.startswith(f"{project}."):
+            stem = match.file.stem
+            if not (stem == project or stem.startswith(f"{project}.")):
                 match_ok = False
 
         if match_ok:

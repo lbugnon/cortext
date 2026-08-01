@@ -81,6 +81,8 @@ class TestNew:
         content = (initialized_vault / "testproject.md").read_text()
         assert "status: planning" in content, "Project should have planning status"
         assert "created:" in content, "Project should have created date"
+        assert "due:" in content, "Project should have optional due field"
+        assert "priority:" in content, "Project should have optional priority field"
 
     def test_new_task_under_project(self, runner, initialized_vault, monkeypatch):
         """cor new task project.taskname should create task under project."""
@@ -540,6 +542,19 @@ class TestStatus:
         result = runner.invoke(cli, ["daily"])
         assert "Overdue" in result.output or "overdue" in result.output.lower()
 
+    def test_status_shows_overdue_project(self, runner, initialized_vault, monkeypatch):
+        """cor daily should surface overdue projects, not just tasks."""
+        monkeypatch.chdir(initialized_vault)
+
+        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
+        proj_path = initialized_vault / "myproj.md"
+        content = proj_path.read_text()
+        content = content.replace("due:", "due: 2020-01-01").replace("status: planning", "status: active")
+        proj_path.write_text(content)
+
+        result = runner.invoke(cli, ["daily"])
+        assert "Myproj" in result.output or "myproj" in result.output.lower()
+
 
 class TestProjects:
     """Test cor projects command."""
@@ -563,7 +578,18 @@ class TestProjects:
         runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
         
         result = runner.invoke(cli, ["projects"])
-        assert "planning" in result.output.lower(), "Should show planning status" 
+        assert "planning" in result.output.lower(), "Should show planning status"
+
+    def test_projects_shows_due_date(self, runner, initialized_vault, monkeypatch):
+        """cor projects should show a project's due date when set."""
+        monkeypatch.chdir(initialized_vault)
+
+        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
+        proj_path = initialized_vault / "myproj.md"
+        proj_path.write_text(proj_path.read_text().replace("due:", "due: 2020-01-01"))
+
+        result = runner.invoke(cli, ["projects"])
+        assert "due" in result.output.lower(), "Should show due date for project"
 
 
 class TestTree:

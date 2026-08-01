@@ -42,6 +42,8 @@ class NoteMetadata:
     priority: Optional[str] = None
     tags: list[str] = None
     requires: list[str] = None
+    continues: list[str] = None
+    related: list[str] = None
 
     def __post_init__(self):
         """Initialize default values for lists."""
@@ -49,6 +51,10 @@ class NoteMetadata:
             self.tags = []
         if self.requires is None:
             self.requires = []
+        if self.continues is None:
+            self.continues = []
+        if self.related is None:
+            self.related = []
 
     @classmethod
     def from_file(cls, path: Path) -> 'NoteMetadata':
@@ -79,8 +85,10 @@ class NoteMetadata:
             modified=_parse_date(meta.get("modified")),
             due=_parse_date(meta.get("due")),
             priority=meta.get("priority"),
-            tags=meta.get("tags", []),
-            requires=meta.get("requires", [])
+            tags=_as_list(meta.get("tags")),
+            requires=_as_list(meta.get("requires")),
+            continues=_as_list(meta.get("continues")),
+            related=_as_list(meta.get("related")),
         )
 
     def to_dict(self) -> dict:
@@ -98,6 +106,8 @@ class NoteMetadata:
             "priority": self.priority,
             "tags": self.tags,
             "requires": self.requires,
+            "continues": self.continues,
+            "related": self.related,
         }
 
     @property
@@ -218,8 +228,28 @@ class Note(NoteMetadata):
             priority=metadata.priority,
             tags=metadata.tags,
             requires=metadata.requires,
+            continues=metadata.continues,
+            related=metadata.related,
             content=post.content
         )
+
+
+def _as_list(value) -> list[str]:
+    """Coerce a frontmatter list field to a list of strings.
+
+    These fields are hand-editable, so `related: myproject` (a bare string) is
+    at least as likely as `related: [myproject]`. Without coercion a string
+    would still support `in`, but as a substring test - `"proj" in "myproject"`
+    is True - which silently corrupts membership checks.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return []
 
 
 def _parse_date(value) -> Optional[datetime]:

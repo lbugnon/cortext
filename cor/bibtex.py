@@ -3,14 +3,27 @@
 Maintains a single references.bib file in ref/ directory.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 from typing import Optional
 
 from .crossref import CrossrefResult
-from bibtexparser import loads as bibtex_loads
-from bibtexparser.bwriter import BibTexWriter
-from bibtexparser.bibdatabase import BibDatabase
+
+# bibtexparser costs ~110ms to import and is only needed by `cor ref`, but this
+# module sits on the import path of every command. `from __future__ import
+# annotations` above keeps the BibDatabase return annotation from needing it at
+# definition time.
+
+
+def _bibtexparser():
+    """Import bibtexparser on demand, returning the three names we use."""
+    from bibtexparser import loads as bibtex_loads
+    from bibtexparser.bwriter import BibTexWriter
+    from bibtexparser.bibdatabase import BibDatabase
+
+    return bibtex_loads, BibTexWriter, BibDatabase
 
 
 def escape_bibtex(text: str) -> str:
@@ -77,6 +90,7 @@ def get_bib_path(notes_dir: Path) -> Path:
 
 def add_bib_entry(notes_dir: Path, citekey: str, result: CrossrefResult) -> None:
     """Add or update an entry in references.bib using bibtexparser."""
+    bibtex_loads, BibTexWriter, BibDatabase = _bibtexparser()
     bib_path = get_bib_path(notes_dir)
     db = BibDatabase()
 
@@ -103,6 +117,7 @@ def add_bib_entry(notes_dir: Path, citekey: str, result: CrossrefResult) -> None
 
 def remove_bib_entry(notes_dir: Path, citekey: str) -> bool:
     """Remove entry from references.bib file. Returns True if removed."""
+    bibtex_loads, BibTexWriter, BibDatabase = _bibtexparser()
     bib_path = get_bib_path(notes_dir)
     if not bib_path.exists():
         return False
@@ -129,6 +144,7 @@ def remove_bib_entry(notes_dir: Path, citekey: str) -> bool:
 
 def has_doi_in_bib(notes_dir: Path, doi: str) -> Optional[str]:
     """Check if DOI exists in references.bib. Returns citekey if found."""
+    bibtex_loads, _, _ = _bibtexparser()
     bib_path = get_bib_path(notes_dir)
     if not bib_path.exists():
         return None
@@ -146,6 +162,7 @@ def has_doi_in_bib(notes_dir: Path, doi: str) -> Optional[str]:
 
 def load_bib_db(notes_dir: Path) -> BibDatabase:
     """Load and return the BibDatabase (empty if missing or parse error)."""
+    bibtex_loads, _, BibDatabase = _bibtexparser()
     bib_path = get_bib_path(notes_dir)
     if not bib_path.exists():
         return BibDatabase()

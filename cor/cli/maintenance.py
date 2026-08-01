@@ -217,6 +217,14 @@ def maintenance_sync(sync_all: bool):
     runner = MaintenanceRunner(notes_dir)
     result = runner.sync(files)
 
+    # Non-blocking vault-level problems (e.g. duplicate stems). Shown before
+    # errors so they are not buried, and reported even when the sync succeeds.
+    if result.warnings:
+        click.echo(click.style("Warnings:", fg="yellow"))
+        for warning in result.warnings:
+            click.echo(f"  - {warning}")
+        click.echo()
+
     # Check for errors
     if result.errors:
         click.echo(click.style("Validation errors:", fg="red"))

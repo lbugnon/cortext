@@ -7,8 +7,9 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from habanero import Crossref
-import arxiv
+# NOTE: habanero and arxiv are imported lazily inside lookup_doi() and
+# lookup_arxiv(). Together they cost ~210ms and are only needed when actually
+# hitting the network from `cor ref`.
 
 
 @dataclass
@@ -112,6 +113,8 @@ def _extract_arxiv_id(url: str) -> Optional[str]:
 
 def lookup_arxiv(doi: str) -> Optional[CrossrefResult]:
     """Lookup metadata using the python-arxiv library."""
+    import arxiv
+
     arxiv_id = _extract_arxiv_id(doi)
     try:
         search = arxiv.Search(id_list=[arxiv_id])
@@ -186,6 +189,8 @@ def lookup_doi(doi: str) -> Optional[CrossrefResult]:
         return lookup_arxiv(doi)
 
     try:
+        from habanero import Crossref
+
         cr = Crossref()
         result = cr.works(ids=doi)
 

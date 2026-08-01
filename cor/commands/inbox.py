@@ -3,7 +3,8 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from urllib import request, error
+# urllib.request is imported lazily in the two functions that talk to
+# Telegram; it costs ~75ms and every `cor` command was paying it.
 
 import click
 import frontmatter
@@ -133,6 +134,8 @@ def pull_remote_inbox(
     Raises:
         ExternalServiceError: If API calls fail
     """
+    from urllib import request, error
+
     base_url = f"https://api.telegram.org/bot{bot_token}"
     backlog_path = notes_dir / "backlog.md"
     

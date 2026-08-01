@@ -321,3 +321,34 @@ class TestNewCommandNaturalLanguage:
         # The description should NOT contain "due tomorrow" text
         # (it may be empty or have just the placeholder)
         assert "due tomorrow" not in post.content.lower()
+
+
+class TestProjectDueDate:
+    """Test that projects accept a due date via new/mark, mirroring tasks."""
+
+    def test_new_project_with_due_and_priority(self, runner, initialized_vault, monkeypatch):
+        """cor new project should parse natural language due date and priority."""
+        monkeypatch.chdir(initialized_vault)
+
+        result = runner.invoke(
+            cli,
+            ["new", "project", "myproj", "ship", "the", "release", "due", "friday", "priority", "high", "--no-edit"]
+        )
+        assert result.exit_code == 0, f"New project failed: {result.output}"
+
+        post = frontmatter.load(initialized_vault / "myproj.md")
+        assert post.metadata.get("due"), "Project due date should be set"
+        assert post.metadata.get("priority") == "high", "Project priority should be set"
+
+    def test_mark_project_sets_due(self, runner, initialized_vault, monkeypatch):
+        """cor mark <project> <status> due <date> should set the project's due date."""
+        monkeypatch.chdir(initialized_vault)
+
+        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
+
+        result = runner.invoke(cli, ["mark", "myproj", "active", "due", "friday"])
+        assert result.exit_code == 0, f"Mark failed: {result.output}"
+
+        post = frontmatter.load(initialized_vault / "myproj.md")
+        assert post.metadata.get("status") == "active"
+        assert post.metadata.get("due"), "Project due date should be set via mark"

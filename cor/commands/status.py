@@ -69,6 +69,57 @@ def _format_note_label(count: int) -> str:
     return f"{count} note" if count == 1 else f"{count} notes"
 
 
+def _vault_source(notes_dir) -> str:
+    """Explain which of the three resolution rules produced this vault.
+
+    Mirrors the precedence in cor.config.get_vault_path().
+    """
+    import os
+    from pathlib import Path
+
+    from ..config import _find_vault_from_cwd, load_config
+
+    try:
+        if _find_vault_from_cwd() is not None:
+            return "found from cwd"
+    except Exception:
+        pass
+
+    if os.environ.get("COR_VAULT"):
+        return "COR_VAULT"
+
+    try:
+        if load_config().get("vault"):
+            return "config"
+    except Exception:
+        pass
+
+    return "unknown"
+
+
+def _print_focus_relations(focus_note, notes_dir) -> None:
+    """Print a project's relations under the tree header.
+
+    Reverse directions are computed, so this needs the whole vault including
+    the archive - a continued project's predecessor lives there.
+    """
+    from ..core.relations import _all_notes
+    from ..dependencies import get_relations
+
+    try:
+        info = get_relations(focus_note, _all_notes(notes_dir))
+    except Exception:
+        return
+
+    for label, stems, color in (
+        ("Continues", info.continues, "magenta"),
+        ("Continued by", info.continued_by, "magenta"),
+        ("Related", info.related, "blue"),
+    ):
+        if stems:
+            click.echo(click.style(f"{label}: {', '.join(stems)}", dim=True, fg=color))
+
+
 def _build_note_counts(notes: list) -> dict[str, int]:
     """Build mapping of parent stem -> attached note count."""
     counts: dict[str, int] = {}
@@ -477,6 +528,13 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
     # Pre-filter tasks once (respects tag propagation)
     tasks = [n for n in notes if n.note_type == "task" and _matches_tag(n, tag, project_tags)]
 
+    # Deadline-driven sections (Overdue / Due Today) also surface projects with
+    # a due date; other sections stay task-only.
+    deadline_items = [
+        n for n in notes
+        if n.note_type in ("task", "project") and _matches_tag(n, tag, project_tags)
+    ]
+
     # Track shown items to avoid duplicates
     shown_paths = set()
     sections_printed = False
@@ -491,8 +549,8 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
         else:
             return f" ({days}d overdue)"
 
-    # 1. Overdue (tasks only, sorted by due date)
-    overdue = [n for n in tasks if n.is_overdue]
+    # 1. Overdue (tasks and projects, sorted by due date)
+    overdue = [n for n in deadline_items if n.is_overdue]
     overdue.sort(key=lambda n: n.due)
     if _print_section(
         "Overdue",
@@ -522,7 +580,7 @@ def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
     # 3. Due today
     due_today = [
         n
-        for n in tasks
+        for n in deadline_items
         if n.due and n.due == today and n.status not in ("done", "dropped") and n.path not in shown_paths
     ]
     priority_order = {"high": 0, "medium": 1, "low": 2}
@@ -685,6 +743,19 @@ def projects(show_all: bool):
 
         display_title = format_title(p.title)
         line = f"  {status_styled} {display_title} - {age_styled}"
+
+        # Append due date when set
+        if p.due:
+            due_color = "red" if p.is_overdue else "yellow" if p.is_due_this_week else "cyan"
+            due_styled = click.style(f"due {format_due_date(p.due)}", fg=due_color)
+            line += f" ({due_styled})"
+
+        # Mark projects that pick up finished work, so the thread back to the
+        # archived predecessor is visible from the list.
+        if p.continues:
+            cont_styled = click.style(f"continues {', '.join(p.continues)}", fg="magenta")
+            line += f" ({cont_styled})"
+
         click.echo(line)
 
     click.echo()
@@ -1066,6 +1137,10 @@ def tree(verbose: bool, depth: int | None, sort: str, interactive: bool, focus: 
         if note_count:
             status_line += f" (and {_format_note_label(note_count)})"
         click.echo(click.style(status_line, dim=True))
+        if focus_note.due:
+            due_color = "red" if focus_note.is_overdue else "yellow" if focus_note.is_due_this_week else "white"
+            click.echo(click.style(f"Due: {format_due_date(focus_note.due)}", dim=True, fg=due_color))
+        _print_focus_relations(focus_note, notes_dir)
     else:
         # Task or group header
         color = TASK_COLORS.get(focus_note.status, "white")
@@ -1194,6 +1269,12 @@ def status(weeks: int | None):
     # Print status report
     period_str = "All Time" if weeks is None else (f"Last Week" if weeks == 1 else f"Last {weeks} Weeks")
     click.echo(click.style(f"\n═══ Vault Status ({period_str}) ═══\n", bold=True))
+
+    # Say which vault this is. get_vault_path() prefers the nearest ancestor of
+    # cwd containing backlog.md over COR_VAULT and the config file, so it is
+    # easy to be looking at a different vault than you think - especially in a
+    # directory that happens to be a vault itself.
+    click.echo(click.style(f"Vault: {notes_dir}  ({_vault_source(notes_dir)})\n", dim=True))
 
     # Projects
     click.echo(click.style("Projects: ", bold=True) + click.style(str(len(projects)), fg='cyan', bold=True))

@@ -268,6 +268,9 @@ def depend():
 
     Dependencies are soft indicators - they don't block work, just provide
     information about relationships between items.
+
+    This is the `requires` half of `cor rel`, kept as a dedicated command.
+    `cor rel` additionally covers `continues` and `related`.
     """
     pass
 

@@ -169,6 +169,7 @@ tags: [coding, urgent]
 | `cor due <name> <date…>` | Set (or `-d` clear) a due date using natural language |
 | `cor link <query>` | Print a `[Title](stem.md)` markdown link (for piping) |
 | `cor depend <add\|remove\|list> …` | Manage soft task/project dependencies |
+| `cor rel <add\|rm\|show> …` | Manage relations: `continues`, `related`, `requires` |
 | `cor sync` | Commit all changes, pull, and push to remote (`--no-pull`, `--no-push`) |
 | `cor daily [tag]` | Show today's tasks; optional `tag` filters by project/task/project tags |
 | `cor weekly` | Show this week's summary |
@@ -438,6 +439,50 @@ cor calendar logout
 - Creates a "Cor Tasks" calendar if it doesn't exist
 - Events include task status in the title: `[active] Task name`
 
+
+### Relations Between Notes
+
+Beyond hierarchy, notes can carry three relations. All hold **bare stems**, so
+they survive a note moving in or out of `archive/`.
+
+| Field | Meaning | Inverse |
+|---|---|---|
+| `continues` | This project picks up finished work | `continued_by` |
+| `related` | Symmetric "see also" | itself |
+| `requires` | Soft dependency | `blocks` |
+
+Only the forward edge is ever stored. Inverses are computed by scanning, so the
+two directions cannot drift apart and archived targets are never rewritten.
+
+**Continuing a finished project.** When work resumes on a project you already
+closed, don't resurrect it from the archive — that erases the `done` state and
+its closing Summary. Create a new project linked to the old one:
+
+```bash
+cor new project screening-v2 -c screening-v1     # at creation time
+cor rel add screening-v2 screening-v1 --as continues   # or later
+```
+
+The predecessor stays archived and stays `done`. Its **Goal** is copied into a
+`## Continues` section in the new project, with a link back to the full file:
+
+```markdown
+## Continues
+
+[< Continues: Screening V1](archive/screening-v1.md)
+
+**Goal (Screening V1):**
+
+Ship the first screening pipeline.
+```
+
+A project can continue several predecessors (`-c old-a -c old-b`), and one
+predecessor can be continued by several successors — useful when a project
+splits. `cor rel show <name>` prints every relation in both directions.
+
+Which sections get copied is one constant, `COPIED_SECTIONS` in
+`cor/core/continuation.py`. Sections that are missing, or that still hold only
+the template's placeholder comment, are skipped rather than copied empty.
 
 ### File Hierarchy & Linking
 

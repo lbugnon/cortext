@@ -189,6 +189,21 @@ class TestNote:
         assert note.is_overdue is True
         assert note.days_overdue > 0
 
+    def test_is_overdue_true_for_project(self, tmp_path):
+        """is_overdue works for projects, not just tasks (type-agnostic property)."""
+        note_file = tmp_path / "overdue_project.md"
+        note_file.write_text("""---
+type: project
+status: active
+due: 2020-01-01
+---
+
+# Overdue Project
+""")
+        note = Note.from_file(note_file)
+        assert note.is_overdue is True
+        assert note.days_overdue > 0
+
     def test_is_overdue_false_when_done(self, overdue_task):
         """Test is_overdue returns False for done tasks even if past due."""
         content = overdue_task.read_text()

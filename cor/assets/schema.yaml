@@ -48,6 +48,24 @@ project:
     description: List of task/project stems this project requires (soft dependencies)
     optional: true
 
+  continues:
+    type: list
+    items: string
+    description: |
+      Stems of projects this project continues (predecessors). Used when a
+      finished project is picked up again as new work instead of being
+      resurrected from the archive. The inverse (`continued_by`) is not
+      stored - it is computed by scanning, like `blocks` is from `requires`.
+    optional: true
+
+  related:
+    type: list
+    items: string
+    description: |
+      Stems of related notes. Symmetric: storing it on either side is enough,
+      queries return the union of both directions.
+    optional: true
+
 task:
   type:
     type: const
@@ -70,7 +88,19 @@ task:
     items: string
     description: List of task/project stems this task requires (soft dependencies)
     optional: true
+
+  related:
+    type: list
+    items: string
+    description: Stems of related notes (symmetric, non-directional)
+    optional: true
 note:
   type:
     type: const
     value: note
+
+  related:
+    type: list
+    items: string
+    description: Stems of related notes (symmetric, non-directional)
+    optional: true

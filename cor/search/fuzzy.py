@@ -181,14 +181,29 @@ def resolve_file_fuzzy(
         click.echo(f"Auto-selected: {stem}" + (" (archived)" if is_archived else ""))
         return (stem, is_archived)
 
-    # 4. Non-interactive mode: use best match with warning
+    # 4. Non-interactive mode (scripts, git hooks, the nvim plugin): there is
+    #    nobody to confirm with, so a weak guess must not be acted on.
+    #
+    #    This used to return matches[0] regardless of score, silently. With
+    #    partial_ratio and score_cutoff=50, a short query scores ~50 against
+    #    almost anything: `cor rename old-a renamed-a` would rename an
+    #    unrelated `via-flag` project and report success. Destructive and
+    #    invisible. Require real confidence, or fail loudly.
     if not sys.stdin.isatty():
+        best_stem, best_archived, best_score = matches[0]
+        if best_score < auto_select_threshold:
+            options = ", ".join(f"{s} ({sc}%)" for s, _, sc in matches[:5])
+            raise NotFoundError(
+                f"No confident match for '{name}' (best: {best_stem} at {best_score}%). "
+                f"Candidates: {options}. "
+                f"Use the exact name, or run interactively to pick from a list."
+            )
         if len(matches) > 1:
             click.echo(
-                f"Warning: Multiple matches found, using best: {matches[0][0]}",
+                f"Warning: Multiple matches found, using best: {best_stem}",
                 err=True,
             )
-        return (matches[0][0], matches[0][1])
+        return (best_stem, best_archived)
 
     # 5. Multiple matches or low confidence: show picker
     return show_picker(matches, name)
@@ -288,14 +303,29 @@ def resolve_task_fuzzy(
         click.echo(f"Auto-selected: {stem}" + (" (archived)" if is_archived else ""))
         return (stem, is_archived)
 
-    # 4. Non-interactive mode: use best match with warning
+    # 4. Non-interactive mode (scripts, git hooks, the nvim plugin): there is
+    #    nobody to confirm with, so a weak guess must not be acted on.
+    #
+    #    This used to return matches[0] regardless of score, silently. With
+    #    partial_ratio and score_cutoff=50, a short query scores ~50 against
+    #    almost anything: `cor rename old-a renamed-a` would rename an
+    #    unrelated `via-flag` project and report success. Destructive and
+    #    invisible. Require real confidence, or fail loudly.
     if not sys.stdin.isatty():
+        best_stem, best_archived, best_score = matches[0]
+        if best_score < auto_select_threshold:
+            options = ", ".join(f"{s} ({sc}%)" for s, _, sc in matches[:5])
+            raise NotFoundError(
+                f"No confident match for '{name}' (best: {best_stem} at {best_score}%). "
+                f"Candidates: {options}. "
+                f"Use the exact name, or run interactively to pick from a list."
+            )
         if len(matches) > 1:
             click.echo(
-                f"Warning: Multiple matches found, using best: {matches[0][0]}",
+                f"Warning: Multiple matches found, using best: {best_stem}",
                 err=True,
             )
-        return (matches[0][0], matches[0][1])
+        return (best_stem, best_archived)
 
     # 5. Multiple matches or low confidence: show picker
     return show_picker(matches, name)

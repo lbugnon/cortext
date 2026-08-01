@@ -226,6 +226,7 @@ from .maintenance import sync, maintenance
 from ..commands.refactor import rename, group
 from ..commands.inbox import inbox
 from ..commands.dependencies import depend
+from ..commands.relations import rel
 from ..commands.refs import ref
 from ..commands.status import daily, projects, weekly, tree, status
 from ..commands.calendar import auth as calendar_auth
@@ -254,6 +255,7 @@ cli.add_command(rename)
 cli.add_command(rename, name="move")  # Alias
 cli.add_command(group)
 cli.add_command(depend)
+cli.add_command(rel)
 cli.add_command(ref)
 cli.add_command(daily)
 cli.add_command(projects)

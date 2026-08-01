@@ -10,6 +10,30 @@ import pytest
 from click.testing import CliRunner
 
 
+@pytest.fixture(autouse=True)
+def isolate_user_config(tmp_path, monkeypatch):
+    """Keep every test out of the real user's home directory.
+
+    Without this, `cor init` writes to the developer's actual config:
+    `set_vault_path()` repointed ~/.config/cor/config.yaml at a pytest tmp dir,
+    and `_install_nvim_plugin()` overwrote ~/.config/nvim/lua/plugins/cortex.lua
+    (it resolves Path.home() directly, so XDG_CONFIG_HOME alone is not enough).
+    Running the suite would silently break the developer's own vault.
+
+    Individual fixtures may point XDG_CONFIG_HOME somewhere more specific;
+    this only guarantees it is never the real one.
+    """
+    fake_home = tmp_path / "home"
+    (fake_home / ".config").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_home / ".config"))
+    # Path.home() consults these before HOME on some platforms.
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    # A stale COR_VAULT from the developer's shell would leak in too.
+    monkeypatch.delenv("COR_VAULT", raising=False)
+
+
 @pytest.fixture
 def runner():
     """Create a Click CLI test runner."""
@@ -64,6 +88,8 @@ created: {date}
 modified: {date}
 type: project
 status: planning
+priority:
+due:
 ---
 # {name}
 

@@ -29,7 +29,13 @@ from ..utils import (
     read_h1,
     title_to_stem,
 )
-from ..completions import complete_name, complete_task_name, complete_task_status, complete_existing_name
+from ..completions import (
+    complete_name,
+    complete_task_name,
+    complete_task_status,
+    complete_existing_name,
+    complete_predecessor_project,
+)
 from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy, resolve_files
 
 
@@ -112,8 +118,14 @@ def _ensure_parents_exist(notes_dir: Path, parent_parts: list[str], child_type: 
 @click.argument("name", shell_complete=complete_name)
 @click.argument("text", nargs=-1)
 @click.option("--no-edit", is_flag=True, help="Do not open the new file in editor")
+@click.option(
+    "--continues", "-c", "continues", multiple=True,
+    shell_complete=complete_predecessor_project,
+    help="Project(s) this one continues. Repeatable. Projects only.",
+)
 @require_init
-def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
+def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool,
+        continues: tuple[str, ...]):
     """Create a new project, task, or note.
 
     Use dot notation for hierarchy: project.task, project.group.task, or deeper
@@ -126,7 +138,14 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
       cor new task my-project.bugs.fix-login              # Creates bugs group
       cor new task my-project.experiments.lr.sweep        # Creates nested groups
       cor new note my-project.meeting-notes
-      
+
+    \b
+    Continuing finished work (instead of resurrecting it from the archive):
+      cor new project screening-v2 -c screening-v1
+      cor new project merged -c old-a -c old-b
+    The predecessor stays archived and stays done; its Goal is copied into the
+    new project for context.
+
     \b
     Natural language dates and tags (for tasks/notes):
       cor new task proj.task finish pipeline due tomorrow
@@ -136,6 +155,11 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
     Note: Use hyphens in names, not dots (e.g., v0-1 not v0.1)
     """
     notes_dir = get_notes_dir()
+
+    if continues and note_type != "project":
+        raise ValidationError(
+            f"--continues is only valid for projects, not {note_type}s."
+        )
 
     # Validate: dots are only for hierarchy, not within names
     parts = name.split(".")
@@ -249,7 +273,7 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
         text = " ".join(text)
     
     text_was_provided = False
-    if text and note_type in ("task", "note"):
+    if text and note_type in ("task", "note", "project"):
         text_was_provided = True
         # Parse natural language dates, tags, status, and priority
         cleaned_text, due_date, parsed_tags, parsed_status, parsed_priority = parse_natural_language_text(text)
@@ -290,17 +314,55 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool):
                 frontmatter.dump(post, f, sort_keys=False)
             click.echo(f"Set status: {parsed_status}")
         
-        # Set priority if parsed (only for tasks)
-        if parsed_priority and note_type == "task":
+        # Set priority if parsed (tasks and projects)
+        if parsed_priority and note_type in ("task", "project"):
             post = frontmatter.load(filepath)
             post['priority'] = parsed_priority
             with open(filepath, 'wb') as f:
                 frontmatter.dump(post, f, sort_keys=False)
             click.echo(f"Set priority: {parsed_priority}")
-    
+
+    # Link predecessors and pull their Goal across. Done last so the
+    # copied context sits in a file that is otherwise fully written.
+    if continues:
+        _link_predecessors(notes_dir, filepath, continues)
+
     # Open editor only if no text was provided (and --no-edit not set)
     if not text_was_provided and not no_edit:
         open_in_editor(filepath)
+
+
+def _link_predecessors(notes_dir: Path, filepath: Path, continues: tuple[str, ...]):
+    """Resolve and attach `continues` predecessors to a freshly created project.
+
+    Shares the `cor rel add --as continues` implementation so both entry points
+    write identical state.
+    """
+    from ..core.continuation import apply_continuation_context
+    from ..core.relations import add_relation
+    from ..search import resolve_file_fuzzy
+    from ..sync.runner import MaintenanceRunner
+
+    focused = get_focused_project()
+    predecessors = []
+    for name in continues:
+        # Predecessors are normally archived - that is the whole point.
+        result = resolve_file_fuzzy(name, include_archived=True, focused_project=focused)
+        if result is None:
+            return
+        predecessors.append(result[0])
+
+    added = add_relation(notes_dir, filepath.stem, predecessors, "continues")
+    if not added:
+        return
+
+    copied = apply_continuation_context(notes_dir, filepath, added)
+    if copied:
+        click.echo(f"Copied context from {', '.join(copied)}")
+
+    MaintenanceRunner(notes_dir).sync([str(filepath)])
+    for stem in added:
+        click.echo(f"Continues: {stem}")
 
 
 @cli.command()
@@ -640,7 +702,7 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
             )
 
         if note.note_type == "project":
-            _update_project_status(file_path, note, actual_status, notes_dir)
+            _update_project_status(file_path, note, actual_status, text, notes_dir)
             continue
 
         if actual_status not in VALID_TASK_STATUS:
@@ -672,8 +734,12 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
             click.echo(f"  ({errors} skipped due to errors)")
 
 
-def _update_project_status(file_path: Path, note, status: str, notes_dir: Path):
-    """Update project status, prompting to drop unfinished tasks when marking done."""
+def _update_project_status(file_path: Path, note, status: str, text: tuple[str, ...], notes_dir: Path):
+    """Update project status, prompting to drop unfinished tasks when marking done.
+
+    Trailing text may carry natural-language due date / priority / tags
+    (e.g. ``cor mark myproject active due friday``), mirroring the task path.
+    """
     if status not in VALID_PROJECT_STATUS:
         raise ValidationError(
             f"Invalid project status '{status}'. "
@@ -707,6 +773,24 @@ def _update_project_status(file_path: Path, note, status: str, notes_dir: Path):
         raise ValidationError("Could not find status field in frontmatter")
     old_status = post.get("status", "none")
     post["status"] = status
+
+    # Trailing text may carry a due date / priority / tags (status is governed
+    # by the command-line argument for projects, so it is not parsed here).
+    if text:
+        _, due_date, parsed_tags, _, parsed_priority = parse_natural_language_text(" ".join(text))
+        if due_date:
+            post["due"] = due_date.strftime(DATE_TIME)
+        if parsed_priority:
+            post["priority"] = parsed_priority
+        if parsed_tags:
+            existing_tags = post.get("tags", []) or []
+            if isinstance(existing_tags, str):
+                existing_tags = [existing_tags]
+            for tag in parsed_tags:
+                if tag not in existing_tags:
+                    existing_tags.append(tag)
+            post["tags"] = existing_tags
+
     with open(file_path, "wb") as f:
         frontmatter.dump(post, f, sort_keys=False)
 

@@ -21,8 +21,44 @@ class DependencyInfo:
     circular_dependencies: list[str]  # Circular dependency chain if detected
 
 
+def calculate_inverse(
+    notes: list[NoteMetadata],
+    field: str = "requires",
+    note_types: tuple[str, ...] = ("task", "project"),
+) -> dict[str, list[str]]:
+    """Calculate the inverse of a relation field (target -> notes pointing at it).
+
+    This is how every reverse direction in Cor is derived: only the forward
+    edge is ever stored in frontmatter, so the two directions cannot drift
+    apart and archived targets never need rewriting.
+
+    Args:
+        notes: List of all notes
+        field: Relation field to invert ("requires", "continues", "related")
+        note_types: Note types that may carry the field. `related` is valid on
+            notes too, so callers pass a wider tuple for it.
+
+    Returns:
+        Dict mapping a stem to the list of stems that point at it via `field`
+    """
+    inverse: dict[str, list[str]] = {}
+
+    for note in notes:
+        if note_types and note.note_type not in note_types:
+            continue
+
+        note_stem = note.path.stem
+
+        for target in getattr(note, field, None) or []:
+            inverse.setdefault(target, []).append(note_stem)
+
+    return inverse
+
+
 def calculate_inverse_dependencies(notes: list[NoteMetadata]) -> dict[str, list[str]]:
     """Calculate inverse dependency mapping (note -> notes that require it).
+
+    Thin wrapper over calculate_inverse() kept for existing callers.
 
     Args:
         notes: List of all notes
@@ -30,21 +66,7 @@ def calculate_inverse_dependencies(notes: list[NoteMetadata]) -> dict[str, list[
     Returns:
         Dict mapping note stem to list of note stems that require it
     """
-    inverse = {}
-
-    for note in notes:
-        # Both tasks and projects can have dependencies
-        if note.note_type not in ("task", "project"):
-            continue
-
-        note_stem = note.path.stem
-
-        for requirement in note.requires:
-            if requirement not in inverse:
-                inverse[requirement] = []
-            inverse[requirement].append(note_stem)
-
-    return inverse
+    return calculate_inverse(notes, field="requires")
 
 
 def check_dependencies_met(note: NoteMetadata, all_notes: list[NoteMetadata]) -> tuple[bool, list[str]]:
@@ -85,12 +107,19 @@ def check_dependencies_met(note: NoteMetadata, all_notes: list[NoteMetadata]) ->
     return len(unmet) == 0, unmet
 
 
-def detect_circular_dependencies(note_stem: str, all_notes: list[NoteMetadata]) -> Optional[list[str]]:
-    """Detect if note is part of a circular dependency chain.
+def detect_circular_dependencies(
+    note_stem: str,
+    all_notes: list[NoteMetadata],
+    field: str = "requires",
+) -> Optional[list[str]]:
+    """Detect if note is part of a circular chain for a directional relation.
 
     Args:
         note_stem: Note to check
         all_notes: All notes
+        field: Directional relation field to follow ("requires" or "continues").
+            Do not pass "related" - it is symmetric, so every edge is trivially
+            a two-cycle and the question is meaningless.
 
     Returns:
         List representing the circular chain if found, None otherwise
@@ -110,11 +139,12 @@ def detect_circular_dependencies(note_stem: str, all_notes: list[NoteMetadata]) 
         visited.add(current)
         note = notes_by_stem.get(current)
 
-        if not note or not note.requires:
+        if not note:
             return None
 
-        for req in note.requires:
-            result = dfs(req, path + [current], visited)
+        targets = getattr(note, field, None) or []
+        for target in targets:
+            result = dfs(target, path + [current], visited)
             if result:
                 return result
 
@@ -197,4 +227,92 @@ def get_dependency_info(note: NoteMetadata, all_notes: list[NoteMetadata]) -> De
         all_requirements_met=all_met,
         missing_requirements=missing,
         circular_dependencies=circular,
+    )
+
+
+# --- General relations (requires / continues / related) ---
+
+#: Relation fields that may appear in frontmatter, and the note types that may
+#: carry them. Only the forward edge is stored; inverses are computed.
+RELATION_FIELDS = {
+    "requires": ("task", "project"),
+    "continues": ("project",),
+    "related": ("task", "project", "note"),
+}
+
+#: Symmetric relations read the same from both ends, so a query returns the
+#: union of the stored edges and the reverse scan.
+SYMMETRIC_RELATIONS = {"related"}
+
+
+@dataclass
+class RelationInfo:
+    """All relations for a note, forward and computed-inverse."""
+
+    note_stem: str
+    note_type: str
+    requires: list[str]       # stored: things this note depends on
+    blocks: list[str]         # computed: notes that require this one
+    continues: list[str]      # stored: predecessor projects
+    continued_by: list[str]   # computed: successor projects
+    related: list[str]        # stored + reverse scan (symmetric)
+    missing: dict[str, list[str]]  # field -> targets that do not exist
+
+    def is_empty(self) -> bool:
+        """True when the note takes part in no relations at all."""
+        return not any(
+            (self.requires, self.blocks, self.continues, self.continued_by, self.related)
+        )
+
+
+def get_relations(note: NoteMetadata, all_notes: list[NoteMetadata]) -> RelationInfo:
+    """Collect every relation for a note, resolving computed inverses.
+
+    Args:
+        note: Note to analyze
+        all_notes: All notes, including archived ones - predecessors of a
+            continued project normally live in archive/, so omitting them
+            would report them as missing.
+
+    Returns:
+        RelationInfo with stored and computed relations
+    """
+    note_stem = note.path.stem
+    known_stems = {n.path.stem for n in all_notes}
+
+    requires = list(note.requires or [])
+    continues = list(note.continues or [])
+    stored_related = list(note.related or [])
+
+    blocks = calculate_inverse(all_notes, "requires").get(note_stem, [])
+    continued_by = calculate_inverse(
+        all_notes, "continues", RELATION_FIELDS["continues"]
+    ).get(note_stem, [])
+
+    # `related` is symmetric: merge what this note stores with the notes that
+    # store a pointer back to it, preserving order and dropping duplicates.
+    reverse_related = calculate_inverse(
+        all_notes, "related", RELATION_FIELDS["related"]
+    ).get(note_stem, [])
+    related = list(dict.fromkeys(stored_related + reverse_related))
+
+    missing = {}
+    for field, targets in (
+        ("requires", requires),
+        ("continues", continues),
+        ("related", stored_related),
+    ):
+        absent = [t for t in targets if t not in known_stems]
+        if absent:
+            missing[field] = absent
+
+    return RelationInfo(
+        note_stem=note_stem,
+        note_type=note.note_type,
+        requires=requires,
+        blocks=blocks,
+        continues=continues,
+        continued_by=continued_by,
+        related=related,
+        missing=missing,
     )

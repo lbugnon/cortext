@@ -8,8 +8,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import click
-from dateparser.search import search_dates
-from dateparser import parse as parse_date
+
+# NOTE: `dateparser` is imported lazily inside parse_natural_language_text().
+# It costs ~160ms to import and is only needed when parsing natural-language
+# text, so keeping it out of module scope keeps `cor` startup fast.
 
 from .config import get_vault_path, get_verbosity
 from .exceptions import NotInitializedError, NotFoundError
@@ -603,7 +605,12 @@ def parse_natural_language_text(text: str) -> tuple[str, datetime | None, list[s
         ('important task', None, [], None, 'high')
     """
     from .schema import VALID_TASK_STATUS, VALID_PRIORITY
-    
+
+    # Imported here rather than at module scope: dateparser costs ~160ms and
+    # every `cor` invocation would otherwise pay it.
+    from dateparser.search import search_dates
+    from dateparser import parse as parse_date
+
     if not text:
         return text, None, [], None, None
     

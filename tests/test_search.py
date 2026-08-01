@@ -421,3 +421,152 @@ class TestSearchCommand:
         assert result_compact.exit_code == 0
         # Compact output should be shorter
         assert len(result_compact.output) < len(result_full.output)
+
+
+class TestSearchArchiveExclusion:
+    """Archive must be excluded unless -a is given, from ANY working directory.
+
+    Regression: the exclusion glob was `!archive/**`. Ripgrep matches a glob
+    containing a slash against the path relative to the *current working
+    directory*, not the search root. `cor` resolves the vault from config, so
+    it is normally run from somewhere else entirely -- and then candidates are
+    `../notes/archive/foo.md`, the glob never matches, and the whole archive
+    leaks into every search while `-a` becomes a no-op.
+
+    These tests deliberately run from OUTSIDE the vault. Running from inside it
+    (as the temp_vault fixture does by default) hides the bug completely.
+    """
+
+    @pytest.fixture
+    def outside_vault(self, vault_with_content, monkeypatch, tmp_path):
+        """Run from a directory that is not the vault, like real `cor` usage."""
+        elsewhere = tmp_path / "somewhere_else"
+        elsewhere.mkdir(exist_ok=True)
+        monkeypatch.chdir(elsewhere)
+        return vault_with_content
+
+    def test_archive_excluded_by_default(self, runner, outside_vault):
+        result = runner.invoke(cli, ["search", "--no-context", "abandoned"])
+
+        assert result.exit_code == 0
+        # "abandoned" appears only in archive/oldproject.md
+        assert "oldproject" not in result.output
+        assert "No matches found" in result.output
+
+    def test_archive_included_with_flag(self, runner, outside_vault):
+        result = runner.invoke(cli, ["search", "-a", "--no-context", "abandoned"])
+
+        assert result.exit_code == 0
+        assert "oldproject" in result.output
+
+    def test_shared_term_excludes_only_archived_hits(self, runner, outside_vault):
+        """A term present in both active and archived notes must not leak archive."""
+        result = runner.invoke(cli, ["search", "--no-context", "machine learning"])
+
+        assert result.exit_code == 0
+        assert "mlproject" in result.output
+        assert "oldproject" not in result.output
+
+    def test_archive_excluded_from_inside_vault_too(self, runner, vault_with_content):
+        """The in-vault case must keep working (fixture already chdir'd there)."""
+        result = runner.invoke(cli, ["search", "--no-context", "abandoned"])
+
+        assert result.exit_code == 0
+        assert "oldproject" not in result.output
+
+
+class TestSearchFilterLimitOrdering:
+    """Metadata filters must be applied before the result limit.
+
+    Regression: search_content() was called with limit=N, truncating the
+    ripgrep stream, and only then were status:/#tag/project: filters applied.
+    A matching note ranked below the first N raw hits was silently dropped,
+    so `cor search "status:done"` reported nothing at the default limit while
+    a large -n found plenty.
+    """
+
+    @pytest.fixture
+    def vault_with_many_notes(self, temp_vault):
+        """30 notes all containing 'widget'; only the last is status: done."""
+        today = date.today().isoformat()
+        for i in range(30):
+            status = "done" if i == 29 else "todo"
+            (temp_vault / f"bulk.item{i:02d}.md").write_text(f"""\
+---
+created: {today}
+modified: {today}
+type: task
+status: {status}
+parent: bulk
+---
+# Item {i}
+
+## Description
+This note mentions widget on its own line.
+""")
+        return temp_vault
+
+    def test_filter_finds_match_beyond_default_limit(self, runner, vault_with_many_notes, monkeypatch):
+        monkeypatch.chdir(vault_with_many_notes)
+
+        result = runner.invoke(cli, ["search", "--no-context", "widget status:done"])
+
+        assert result.exit_code == 0
+        assert "No matches found" not in result.output
+        assert "item29" in result.output
+
+    def test_filter_result_matches_large_limit(self, runner, vault_with_many_notes, monkeypatch):
+        """Default limit and a huge limit must agree on what the filter matched."""
+        monkeypatch.chdir(vault_with_many_notes)
+
+        default = runner.invoke(cli, ["search", "--no-context", "widget status:done"])
+        large = runner.invoke(cli, ["search", "-n", "2000", "--no-context", "widget status:done"])
+
+        assert default.exit_code == 0 and large.exit_code == 0
+        assert ("item29" in default.output) == ("item29" in large.output)
+
+
+class TestFilterOnlyQuery:
+    """A query with filters but no text lists notes, not every matching line."""
+
+    def test_lists_notes_not_lines(self, runner, vault_with_content, monkeypatch):
+        monkeypatch.chdir(vault_with_content["vault"])
+
+        result = runner.invoke(cli, ["search", "status:active"])
+
+        assert result.exit_code == 0
+        # Note listing, not `path:line` grep dump
+        assert ".md:" not in result.output
+        assert "note" in result.output
+        # Both active notes present, the todo one absent
+        assert "mlproject" in result.output
+        assert "mlproject.data" not in result.output
+
+    def test_shows_title_status_and_tags(self, runner, vault_with_content, monkeypatch):
+        monkeypatch.chdir(vault_with_content["vault"])
+
+        result = runner.invoke(cli, ["search", "#ml"])
+
+        assert result.exit_code == 0
+        assert "ML Project" in result.output      # title
+        assert "#ml" in result.output             # tags
+        assert "mlproject" in result.output       # stem, for use as a link target
+
+    def test_project_filter_includes_project_file_itself(self, runner, vault_with_content, monkeypatch):
+        """project:NAME must match NAME.md, not just NAME.child.md."""
+        monkeypatch.chdir(vault_with_content["vault"])
+
+        result = runner.invoke(cli, ["search", "project:mlproject"])
+
+        assert result.exit_code == 0
+        assert "ML Project" in result.output
+
+    def test_filter_only_respects_archived_flag(self, runner, vault_with_content, monkeypatch):
+        monkeypatch.chdir(vault_with_content["vault"])
+
+        without = runner.invoke(cli, ["search", "status:done"])
+        with_archive = runner.invoke(cli, ["search", "-a", "status:done"])
+
+        assert without.exit_code == 0 and with_archive.exit_code == 0
+        assert "oldproject" not in without.output
+        assert "oldproject" in with_archive.output

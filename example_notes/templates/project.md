@@ -3,6 +3,8 @@ type: project
 status: planning
 created: {date}
 modified: {date}
+priority:
+due:
 ---
 # {name}
 
