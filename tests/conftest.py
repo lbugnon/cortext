@@ -40,6 +40,26 @@ def runner():
     return CliRunner()
 
 
+def build_vault(vault: Path, git: bool = True) -> Path:
+    """Populate `vault` with the structure cor expects, creating it if needed.
+
+    Factored out of the temp_vault fixture so tests needing more than one
+    vault (multivault, the interactive shell) get the same real templates
+    instead of hand-rolled approximations that drift.
+
+    Returns the vault path.
+    """
+    vault.mkdir(parents=True, exist_ok=True)
+
+    if git:
+        subprocess.run(["git", "init"], cwd=vault, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=vault, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=vault, capture_output=True)
+
+    _write_vault_contents(vault)
+    return vault
+
+
 @pytest.fixture
 def temp_vault(tmp_path, monkeypatch):
     """Create a temporary vault directory with git initialized.
@@ -68,18 +88,18 @@ def temp_vault(tmp_path, monkeypatch):
     # Change to vault directory
     monkeypatch.chdir(vault)
 
-    # Initialize git
-    subprocess.run(["git", "init"], cwd=vault, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=vault, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=vault, capture_output=True)
+    return build_vault(vault)
 
+
+def _write_vault_contents(vault: Path) -> Path:
+    """Write templates, archive/ and the backlog.md vault marker."""
     # Create templates directory
     templates = vault / "templates"
-    templates.mkdir()
+    templates.mkdir(exist_ok=True)
 
     # Create archive directory
     archive = vault / "archive"
-    archive.mkdir()
+    archive.mkdir(exist_ok=True)
 
     # Create basic templates
     (templates / "project.md").write_text("""\

@@ -4,7 +4,7 @@ modified: 2026-01-05 18:37
 ---
 # Backlog
 
-Capture anything here. Process with `cor process`.
+Capture anything here. Process with `cor inbox process`.
 
 ## Inbox
 

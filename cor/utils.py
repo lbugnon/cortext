@@ -4,6 +4,7 @@ import functools
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,17 +14,98 @@ import click
 # It costs ~160ms to import and is only needed when parsing natural-language
 # text, so keeping it out of module scope keeps `cor` startup fast.
 
-from .config import get_vault_path, get_verbosity
-from .exceptions import NotInitializedError, NotFoundError
+from .config import (
+    is_vault_initialized,
+    VAULT_SOURCE_CONFIG,
+    _known_vaults_hint,
+    get_vault_path,
+    get_vaults,
+    get_verbosity,
+    resolve_vault,
+)
+from .exceptions import ConfigError, NotInitializedError, NotFoundError
 from .schema import DATE_TIME
 
 
-def require_init(f):
-    """Decorator that ensures vault is initialized before running command."""
+def _in_shell_completion() -> bool:
+    """True when the process was spawned to compute shell completions.
+
+    Click sets _COR_COMPLETE for the duration of a completion run. Prompting
+    there would hang the user's shell on every Tab press.
+    """
+    return any(k.startswith("_COR_COMPLETE") for k in os.environ)
+
+
+def pick_vault_interactively(reason: str) -> Path:
+    """Ask the user which registered vault to act on.
+
+    Only ever called when the vault could not be determined from cwd or
+    COR_VAULT, i.e. when acting on the config default would be a guess.
+
+    Raises:
+        ConfigError: if the user cancels.
+    """
+    from simple_term_menu import TerminalMenu
+
+    vaults = get_vaults()
+    names = sorted(vaults)
+    options = [f"{name}  ({vaults[name]})" for name in names]
+    options.append("[Cancel]")
+
+    click.echo(reason)
+    menu = TerminalMenu(
+        options,
+        title="Which vault? (arrows to navigate, Enter to confirm, q to cancel):",
+        menu_cursor_style=("fg_cyan", "bold"),
+        menu_highlight_style=("bg_cyan", "fg_black"),
+    )
+    choice = menu.show()
+
+    if choice is None or choice == len(options) - 1:
+        raise ConfigError("Cancelled. No vault selected.")
+
+    chosen = vaults[names[choice]]
+    # Pin it for the rest of the process, including any subprocess a command
+    # spawns (editor, git, the tree TUI), so every layer agrees on the vault.
+    os.environ["COR_VAULT"] = str(chosen)
+    return chosen
+
+
+def require_init(f=None, *, write: bool = True):
+    """Ensure a vault is resolved, unambiguous, and initialized.
+
+    Resolution falling through to the config default means neither cwd nor
+    COR_VAULT said anything - the vault is a guess. Acting on a guess is how
+    notes land in the wrong vault, so a command that writes will ask when a
+    human is present and refuse when one is not.
+
+    Reading from a guessed vault is recoverable - you see the wrong output
+    and adjust - so read-only commands opt out with ``@require_init(write=False)``
+    and keep the old silent fallback. The default is the strict one on
+    purpose: a read command mistakenly left strict merely prompts, while a
+    write command mistakenly left lax silently corrupts the wrong vault.
+    """
+    if f is None:
+        return functools.partial(require_init, write=write)
+
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        notes_dir = get_vault_path()
-        if not (notes_dir / "backlog.md").exists():
+        notes_dir, source = resolve_vault()
+
+        if write and source == VAULT_SOURCE_CONFIG and not _in_shell_completion():
+            if sys.stdin.isatty():
+                notes_dir = pick_vault_interactively(
+                    "Not inside a vault, and COR_VAULT is unset."
+                )
+            else:
+                raise ConfigError(
+                    "Not inside a vault and COR_VAULT is unset, so the target "
+                    "vault is ambiguous. cd into a vault, set COR_VAULT, or run "
+                    "from the interactive shell ('cor').\n"
+                    f"Known vaults: {_known_vaults_hint()}"
+                )
+
+        if not is_vault_initialized(notes_dir):
             raise NotInitializedError("Not initialized. Run 'cor init' first.")
         return f(*args, **kwargs)
     return wrapper
@@ -48,11 +130,6 @@ def get_parent_name(stem: str) -> str | None:
 def get_root_project(stem: str) -> str:
     """Get root project name (project.group.task -> project)."""
     return stem.split(".")[0]
-
-
-def get_hierarchy_depth(stem: str) -> int:
-    """Get depth in hierarchy (project=1, project.task=2, project.group.task=3)."""
-    return len(stem.split("."))
 
 
 def get_templates_dir() -> Path:
@@ -448,11 +525,6 @@ def log_verbose(message: str) -> None:
 def log_debug(message: str) -> None:
     """Print debug message (verbosity level 3)."""
     log_info(message, min_level=3)
-
-
-def log_error(message: str) -> None:
-    """Print error message (always shown)."""
-    click.secho(message, fg="red", err=True)
 
 
 # Time keywords mapping for natural language date parsing

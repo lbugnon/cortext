@@ -155,7 +155,7 @@ def depend_remove(dependent_item: str, required_item: str):
 
 @click.command(short_help="List dependencies for a note")
 @click.argument("item_name", shell_complete=complete_task_name)
-@require_init
+@require_init(write=False)
 def depend_list(item_name: str):
     """Show dependency information for a task or project.
 

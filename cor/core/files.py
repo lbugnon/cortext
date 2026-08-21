@@ -9,6 +9,28 @@ from typing import Iterator
 import frontmatter
 
 
+def load_note(filepath: str | Path) -> frontmatter.Post | None:
+    """Load a note file and return its frontmatter Post, or None on failure.
+
+    The canonical implementation. There used to be three spellings of these two
+    operations: module-level copies in `sync/runner.py` and methods on a
+    `NoteFileManager` class that nothing in production ever constructed.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        return None
+    try:
+        return frontmatter.load(path)
+    except Exception:
+        return None
+
+
+def save_note(filepath: str | Path, post: frontmatter.Post) -> None:
+    """Write a frontmatter Post back to disk, preserving key order."""
+    path = Path(filepath)
+    with open(path, 'wb') as f:
+        frontmatter.dump(post, f, sort_keys=False)
+
 def _is_top_level_note(path: Path) -> bool:
     """Return True if ``path`` is a note file (``type: note``) at the top level.
 
@@ -151,24 +173,6 @@ class FileIterator:
             if len(parts) == len(parent_parts) + 1:
                 yield child_path
 
-    def iter_by_pattern(self, pattern: str,
-                       include_archive: bool = False) -> Iterator[Path]:
-        """Iterate files matching a glob pattern.
-
-        Args:
-            pattern: Glob pattern (e.g., "*.md", "project.*.md")
-            include_archive: If True, search archive directory too
-
-        Yields:
-            Path objects matching pattern
-        """
-        # Search active directory
-        yield from self.notes_dir.glob(pattern)
-
-        # Search archive if requested
-        if include_archive and self.archive_dir.exists():
-            yield from self.archive_dir.glob(pattern)
-
     def get_project_stems(self, include_archive: bool = False) -> list[str]:
         """Get list of project stems.
 
@@ -212,147 +216,6 @@ class FileIterator:
         """
         return sum(1 for _ in self.iter_children(parent_stem, include_archive))
 
-
-class NoteFileManager:
-    """Centralized file I/O operations for notes."""
-
-    def __init__(self, notes_dir: Path):
-        """Initialize file manager.
-
-        Args:
-            notes_dir: Path to notes directory
-        """
-        self.notes_dir = notes_dir
-        self.iterator = FileIterator(notes_dir)
-
-    def load_note(self, path: Path) -> frontmatter.Post | None:
-        """Load note with frontmatter.
-
-        Args:
-            path: Path to note file
-
-        Returns:
-            Frontmatter Post object, or None if error
-        """
-        if not path.exists():
-            return None
-
-        try:
-            return frontmatter.load(path)
-        except Exception:
-            return None
-
-    def save_note(self, path: Path, post: frontmatter.Post) -> None:
-        """Save note with frontmatter.
-
-        Args:
-            path: Path to save to
-            post: Frontmatter Post object
-        """
-        with open(path, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
-
-    def extract_title(self, post: frontmatter.Post,
-                     fallback_stem: str = None) -> str:
-        """Extract title from note content.
-
-        Looks for first line starting with "# ".
-
-        Args:
-            post: Frontmatter Post object
-            fallback_stem: Fallback title if no heading found
-
-        Returns:
-            Note title
-        """
-        if not post or not post.content:
-            return fallback_stem or "Untitled"
-
-        for line in post.content.split("\n"):
-            if line.startswith("# "):
-                return line[2:].strip()
-
-        return fallback_stem or "Untitled"
-
-    def extract_metadata(self, path: Path) -> dict:
-        """Extract only frontmatter metadata (fast, no content parsing).
-
-        Args:
-            path: Path to note file
-
-        Returns:
-            Metadata dictionary
-        """
-        post = self.load_note(path)
-        return dict(post.metadata) if post else {}
-
-    def exists(self, stem: str, include_archive: bool = True) -> bool:
-        """Check if a note exists by stem.
-
-        Args:
-            stem: Note stem to check
-            include_archive: If True, check archive directory too
-
-        Returns:
-            True if note exists
-        """
-        active_path = self.notes_dir / f"{stem}.md"
-        if active_path.exists():
-            return True
-
-        if include_archive:
-            archive_dir = self.notes_dir / "archive"
-            archive_path = archive_dir / f"{stem}.md"
-            if archive_path.exists():
-                return True
-
-        return False
-
-    def find_note(self, stem: str,
-                 include_archive: bool = True) -> tuple[Path, bool] | None:
-        """Find note by stem in active or archive directory.
-
-        Args:
-            stem: Note stem to find
-            include_archive: If True, check archive directory too
-
-        Returns:
-            Tuple of (path, is_archived) if found, None otherwise
-        """
-        active_path = self.notes_dir / f"{stem}.md"
-        if active_path.exists():
-            return (active_path, False)
-
-        if include_archive:
-            archive_dir = self.notes_dir / "archive"
-            archive_path = archive_dir / f"{stem}.md"
-            if archive_path.exists():
-                return (archive_path, True)
-
-        return None
-
-    def read_content(self, path: Path) -> str:
-        """Read full file content (including frontmatter).
-
-        Args:
-            path: Path to file
-
-        Returns:
-            File content
-        """
-        return path.read_text() if path.exists() else ""
-
-    def write_content(self, path: Path, content: str) -> None:
-        """Write full file content.
-
-        Args:
-            path: Path to file
-            content: Content to write
-        """
-        path.write_text(content)
-
-
-# Convenience functions for common operations
 
 def get_all_note_files(notes_dir: Path, include_archive: bool = False) -> list[Path]:
     """Get list of all note file paths.

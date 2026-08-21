@@ -22,7 +22,6 @@ from ..utils import (
 
 from ..completions import complete_project
 from ..search.fuzzy import fuzzy_match
-from simple_term_menu import TerminalMenu
 
 @click.command(short_help="Interactive backlog processing")
 @require_init
@@ -136,6 +135,8 @@ def process():
                         options = [f"{stem}  [{score}%]" for stem, _, score in matches]
                         options.append("[Cancel]")
                         if matches:
+                            from simple_term_menu import TerminalMenu
+
                             menu = TerminalMenu(
                                 options,
                                 title="  Select parent (arrows, Enter)",
@@ -151,6 +152,8 @@ def process():
                         click.echo(click.style("  No projects found.", fg="red"))
                         continue
                     options = [p for p in projects[:10]] + ["[Cancel]"]
+                    from simple_term_menu import TerminalMenu
+
                     menu = TerminalMenu(
                         options,
                         title="  Select project (arrows, Enter)",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, ClassVar
 
@@ -12,6 +13,7 @@ from textual.suggester import Suggester
 from textual.widgets import Input, Static, Tree
 
 from ..schema import STATUS_SYMBOLS
+from ..ui.theme import status_style
 from .colors import STATUS_STYLES, STATUS_KEY_BINDINGS
 
 # key -> (status, symbol, color), derived so symbols stay sourced from schema.
@@ -46,7 +48,7 @@ class TaskNode:
         self.file_path = file_path
 
     def get_rich_label(self) -> Text:
-        symbol, color = STATUS_STYLES.get(self.status, ("[ ]", "white"))
+        symbol, color = status_style(self.status)
         text = Text()
         text.append(symbol, style=color)
         text.append(f" {self.title}")
@@ -382,20 +384,16 @@ class ProjectTreeApp(App):
             if note:
                 self._append_to_file(task.file_path, note)
 
-            import subprocess
-            result = subprocess.run(
-                ["cor", "mark", task.stem, new_status],
-                capture_output=True, text=True, cwd=self.notes_dir,
-            )
-            if result.returncode != 0:
-                self.notify(f"Error: {result.stderr}", severity="error")
+            err = self._run_cor("mark", task.stem, new_status)
+            if err:
+                self.notify(f"Error: {err}", severity="error")
                 return
 
             self._load_data()
             self._populate_tree(preserve_cursor_stem=preserve)
             self.query_one("#header", Static).update(self._header_text())
 
-            symbol, _ = STATUS_STYLES.get(new_status, ("[ ]", "white"))
+            symbol, _ = status_style(new_status)
             # Escape markup characters in the symbol (e.g., [/] for waiting status)
             escaped_symbol = symbol.replace("[", r"\[")
             self.notify(f"{escaped_symbol} {new_status}", timeout=1.5)
@@ -408,7 +406,7 @@ class ProjectTreeApp(App):
         if not task or not task.is_task:
             self.notify("No task selected", severity="warning")
             return
-        symbol, _ = STATUS_STYLES.get(new_status, ("[ ]", "white"))
+        symbol, _ = status_style(new_status)
         self._prompt_input(
             placeholder=f"{symbol} {new_status} — note (enter / esc)",
             callback=lambda text: self._change_status(new_status, task=task, note=text),
@@ -446,17 +444,13 @@ class ProjectTreeApp(App):
             task_name = parts[0]  # e.g., "cor.group.taskname"
             extra_text = parts[1:]  # e.g., ["this", "is", "description", "due", "tomorrow"]
             
-            import subprocess
-            cmd = ["cor", "new", "task", task_name, "--no-edit"]
+            cmd = ["new", "task", task_name, "--no-edit"]
             if extra_text:
                 cmd.extend(extra_text)
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True, text=True, cwd=self.notes_dir,
-            )
-            if result.returncode != 0:
-                self.notify(f"Error: {result.stderr}", severity="error")
+
+            err = self._run_cor(*cmd)
+            if err:
+                self.notify(f"Error: {err}", severity="error")
                 return
             self._load_data()
             self._populate_tree(preserve_cursor_stem=task_name)
@@ -473,12 +467,50 @@ class ProjectTreeApp(App):
     # ── Move / reparent ───────────────────────────────────────────────────────
 
     def _run_cor(self, *args: str) -> str | None:
-        """Run a cor subcommand. Returns stderr on failure, None on success."""
-        import subprocess
-        result = subprocess.run(
-            ["cor", *args], capture_output=True, text=True, cwd=self.notes_dir,
-        )
-        return result.stderr if result.returncode != 0 else None
+        """Run a cor subcommand in-process. Returns an error message, or None.
+
+        This app already runs inside a loaded `cor` process, so spawning `cor`
+        as a subprocess paid the whole interpreter startup (~166ms measured)
+        on every keystroke-driven action. Dispatching into the click group
+        directly removes that per-action cost.
+
+        Output is captured rather than written through: Textual owns the
+        terminal while the app is running, so a stray click.echo would corrupt
+        the display. COR_VAULT is pinned for the duration so the command
+        resolves the same vault the tree is showing - the job `cwd=` did for
+        the subprocess.
+        """
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from ..cli import cli
+        from ..exceptions import CorError
+
+        out, err = io.StringIO(), io.StringIO()
+        previous = os.environ.get("COR_VAULT")
+        os.environ["COR_VAULT"] = str(self.notes_dir)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                cli.main(args=list(args), prog_name="cor", standalone_mode=False)
+        except SystemExit as e:
+            # CorCLI.invoke turns CorError into a red message plus sys.exit(1),
+            # so the text we want is already in the captured stderr.
+            if e.code not in (0, None):
+                return (
+                    err.getvalue().strip()
+                    or out.getvalue().strip()
+                    or f"cor {' '.join(args)} failed"
+                )
+        except CorError as e:
+            return str(e)
+        except Exception as e:
+            return f"{type(e).__name__}: {e}"
+        finally:
+            if previous is None:
+                os.environ.pop("COR_VAULT", None)
+            else:
+                os.environ["COR_VAULT"] = previous
+        return None
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -488,7 +520,7 @@ class ProjectTreeApp(App):
         preview = self.query_one("#preview-content", Static)
         
         if task:
-            symbol, color = STATUS_STYLES.get(task.status, ("[ ]", "white"))
+            symbol, color = status_style(task.status)
             text = Text()
             text.append(f"{symbol} ", style=color)
             text.append(f"{task.title}  ", style="bold")
@@ -518,7 +550,7 @@ class ProjectTreeApp(App):
                 preview_text.append(f"Type: ", style="dim")
                 preview_text.append(f"{note.note_type}\n", style="cyan")
             if note.status:
-                symbol, color = STATUS_STYLES.get(note.status, ("[ ]", "white"))
+                symbol, color = status_style(note.status)
                 preview_text.append(f"Status: ", style="dim")
                 preview_text.append(f"{symbol} {note.status}\n", style=color)
             if note.due:

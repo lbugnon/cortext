@@ -11,25 +11,14 @@ from ..schema import STATUS_SYMBOLS
 from ..utils import get_notes_dir, format_time_ago, format_due_date, require_init, format_title, get_parent_name
 from ..config import get_focused_project
 
-# Shared color mappings for all tree views
-TASK_COLORS = {
-    "done": "green",
-    "active": "cyan",
-    "blocked": "red",
-    "dropped": "magenta",
-    "todo": "white",
-    "waiting": "yellow",
-}
-
-PROJECT_COLORS = {
-    "planning": "blue",
-    "active": "green",
-    "paused": "yellow",
-    "done": "bright_black",
-}
-
-# Status sort order for tree display
-STATUS_ORDER = {"blocked": 0, "active": 1, "waiting": 2, "todo": 3, "dropped": 4, "done": 5}
+# Colors, symbols and ordering all come from the presentation layer. These
+# names are kept as aliases because they are referenced throughout this module.
+from ..ui.theme import (  # noqa: E402
+    PROJECT_COLORS,
+    STATUS_COLORS as TASK_COLORS,
+    STATUS_ORDER,
+    status_style,
+)
 
 
 def _extract_description(note) -> str | None:
@@ -70,31 +59,13 @@ def _format_note_label(count: int) -> str:
 
 
 def _vault_source(notes_dir) -> str:
-    """Explain which of the three resolution rules produced this vault.
-
-    Mirrors the precedence in cor.config.get_vault_path().
-    """
-    import os
-    from pathlib import Path
-
-    from ..config import _find_vault_from_cwd, load_config
+    """Explain which of the three resolution rules produced this vault."""
+    from ..config import resolve_vault, vault_source_label
 
     try:
-        if _find_vault_from_cwd() is not None:
-            return "found from cwd"
+        return vault_source_label(resolve_vault()[1])
     except Exception:
-        pass
-
-    if os.environ.get("COR_VAULT"):
-        return "COR_VAULT"
-
-    try:
-        if load_config().get("vault"):
-            return "config"
-    except Exception:
-        pass
-
-    return "unknown"
+        return "unknown"
 
 
 def _print_focus_relations(focus_note, notes_dir) -> None:
@@ -274,43 +245,87 @@ def show_tree(
     max_depth: int | None = None,
     current_depth: int = 0,
 ):
-    """
-    Unified tree rendering function.
+    """Render a task tree under `parent_name` to stdout.
+
+    Guides are drawn by rich (see cor/ui/tree.py) rather than by hand here.
+    The `prefix` argument is retained for signature compatibility and ignored:
+    indentation is now a property of the tree structure, not a string carried
+    down the recursion.
 
     Args:
         parent_name: The parent node to render children of
         tasks_by_parent: Dict mapping parent names to list of child tasks
-        prefix: Current indentation prefix string
+        prefix: Unused; kept so existing callers keep working
         filter_fn: Optional function(task) -> bool to filter which tasks to show
         sort_fn: Optional function(tasks) -> sorted_tasks
         render_fn: Function(task) -> str to render task display (symbol + title)
         show_separators: Whether to show --- separators between status groups
-        separator_transitions: List of (from_statuses, to_statuses) tuples for separators
+        separator_transitions: List of (from_statuses, to_statuses) tuples
         verbose: Whether to show description text under tasks
         all_notes: List of all notes for dependency resolution (optional)
         note_counts: Optional mapping of parent stem -> number of attached notes
         max_depth: Maximum depth to display (None for unlimited)
         current_depth: Current depth in the tree (used internally for recursion)
     """
-    note_counts = note_counts or {}
+    from ..ui.tree import new_tree, print_tree
 
     if parent_name not in tasks_by_parent:
         return
 
+    tree = new_tree()
+    added = _build_subtree(
+        tree,
+        parent_name,
+        tasks_by_parent,
+        filter_fn=filter_fn,
+        sort_fn=sort_fn,
+        render_fn=render_fn,
+        show_separators=show_separators,
+        separator_transitions=separator_transitions,
+        verbose=verbose,
+        all_notes=all_notes,
+        note_counts=note_counts,
+        max_depth=max_depth,
+        current_depth=current_depth,
+    )
+    if added:
+        print_tree(tree)
+
+
+def _build_subtree(
+    node,
+    parent_name: str,
+    tasks_by_parent: dict,
+    filter_fn=None,
+    sort_fn=None,
+    render_fn=None,
+    show_separators: bool = False,
+    separator_transitions: list = None,
+    verbose: bool = False,
+    all_notes: list | None = None,
+    note_counts: dict[str, int] | None = None,
+    max_depth: int | None = None,
+    current_depth: int = 0,
+) -> bool:
+    """Attach children of `parent_name` to `node`. Returns True if any were."""
+    from ..ui.tree import click_text
+
+    note_counts = note_counts or {}
+
+    if parent_name not in tasks_by_parent:
+        return False
+
     tasks = tasks_by_parent[parent_name]
 
-    # Apply filter if provided
     if filter_fn:
         tasks = [t for t in tasks if filter_fn(t)]
 
     if not tasks:
-        return
+        return False
 
-    # Apply sorting if provided
     if sort_fn:
         tasks = sort_fn(tasks)
 
-    # Default separator transitions
     if separator_transitions is None:
         separator_transitions = [
             (("blocked", "active", "waiting"), ("todo",)),
@@ -318,70 +333,64 @@ def show_tree(
         ]
 
     prev_status = None
-    for i, task in enumerate(tasks):
-        is_last = i == len(tasks) - 1
-        branch = "└── " if is_last else "├── "
-        child_prefix = prefix + ("    " if is_last else "│   ")
-
-        # Check for separator
+    for task in tasks:
         if show_separators and prev_status is not None:
             for from_statuses, to_statuses in separator_transitions:
                 if prev_status in from_statuses and task.status in to_statuses:
-                    sep_prefix = prefix + "│"
-                    sep_line = click.style(f"{sep_prefix}   ---", dim=True)
-                    click.echo(sep_line)
+                    node.add(click_text(click.style("---", dim=True)))
                     break
 
-        # Render the task
         if render_fn:
             task_display = render_fn(task)
         else:
-            symbol = STATUS_SYMBOLS.get(task.status, "[ ]")
-            color = TASK_COLORS.get(task.status, "white")
+            symbol, color = status_style(task.status)
             task_display = f"{click.style(symbol, fg=color)} {task.title}"
 
-        # Add dependency indicator (compact mode)
         if all_notes:
-            dep_indicator = _format_dependency_indicator(task, all_notes, verbose=False)
-            task_display += dep_indicator
+            task_display += _format_dependency_indicator(task, all_notes, verbose=False)
 
-        # Append note count if this task has attached notes
         note_count = note_counts.get(task.path.stem, 0)
         if note_count:
             note_suffix = _format_note_label(note_count)
             task_display += click.style(f" (and {note_suffix})", dim=True)
 
-        line = f"{prefix}{branch}{task_display}"
-        click.echo(line)
+        child = node.add(click_text(task_display))
 
-        # Show description if verbose
         if verbose:
             desc = _extract_description(task)
             if desc:
-                desc_line = f"{child_prefix}    {click.style(desc, dim=True)}"
-                click.echo(desc_line)
+                child.add(click_text(click.style(desc, dim=True)))
 
-            # Show due date in verbose mode
             if task.due:
                 due_str = format_due_date(task.due)
-                due_color = "red" if task.is_overdue else "yellow" if task.is_due_this_week else "white"
-                due_line = f"{child_prefix}    {click.style(f'Due: {due_str}', dim=True, fg=due_color)}"
-                click.echo(due_line)
+                due_color = (
+                    "red" if task.is_overdue
+                    else "yellow" if task.is_due_this_week
+                    else "white"
+                )
+                child.add(
+                    click_text(
+                        click.style(f"Due: {due_str}", dim=True, fg=due_color)
+                    )
+                )
 
-            # Show dependency details in verbose mode
             if all_notes:
-                dep_details = _format_dependency_indicator(task, all_notes, verbose=True)
+                dep_details = _format_dependency_indicator(
+                    task, all_notes, verbose=True
+                )
                 if dep_details:
                     for detail_line in dep_details.split("\n"):
-                        styled_line = f"{child_prefix}    {click.style(detail_line, dim=True, fg='yellow')}"
-                        click.echo(styled_line)
+                        child.add(
+                            click_text(
+                                click.style(detail_line, dim=True, fg="yellow")
+                            )
+                        )
 
-        # Recurse for children only if within depth limit
         if max_depth is None or current_depth < max_depth:
-            show_tree(
+            _build_subtree(
+                child,
                 task.path.stem,
                 tasks_by_parent,
-                child_prefix,
                 filter_fn=filter_fn,
                 sort_fn=sort_fn,
                 render_fn=render_fn,
@@ -395,6 +404,8 @@ def show_tree(
             )
 
         prev_status = task.status
+
+    return True
 
 
 def _group_by_project(tasks: list) -> dict:
@@ -474,7 +485,7 @@ def _matches_tag(note, tag, project_tags) -> bool:
 @click.option("--all", "-a", "show_all", is_flag=True, help="Show all items (no limit)")
 @click.option("--verbose", "-v", is_flag=True, help="Show task descriptions")
 @click.argument("tag", required=False, shell_complete=complete_project)
-@require_init
+@require_init(write=False)
 def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
     """Show what needs attention today.
 
@@ -667,7 +678,7 @@ def _get_project_last_activity(project_name: str, all_notes: list) -> datetime |
 
 @click.command(short_help="List projects with status and activity")
 @click.option("--all", "-a", "show_all", is_flag=True, help="Include archived/done projects")
-@require_init
+@require_init(write=False)
 def projects(show_all: bool):
     """List active projects with status and age.
 
@@ -765,7 +776,7 @@ def projects(show_all: bool):
 @click.option("--weeks", "-w", default=1, help="Number of weeks to look back (default: 1)")
 @click.option("--verbose", "-v", is_flag=True, help="Show task descriptions")
 @click.argument("tag", required=False, shell_complete=complete_project)
-@require_init
+@require_init(write=False)
 def weekly(weeks: int, verbose: bool, tag: str | None):
     """Show weekly summary in tree format.
 
@@ -1034,7 +1045,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
               help="Sort tasks by status (default) or alphabetically")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive mode (vim keys to navigate and edit)")
 @click.argument("focus", shell_complete=complete_existing_name)
-@require_init
+@require_init(write=False)
 def tree(verbose: bool, depth: int | None, sort: str, interactive: bool, focus: str):
     """Show task tree for a project or task group.
 
@@ -1198,7 +1209,7 @@ def tree(verbose: bool, depth: int | None, sort: str, interactive: bool, focus: 
 
 @click.command(short_help="Vault statistics and overview")
 @click.option("--weeks", "-w", default=None, type=int, help="Number of weeks to look back (default: all time)")
-@require_init
+@require_init(write=False)
 def status(weeks: int | None):
     """Vault status report.
 

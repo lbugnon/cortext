@@ -35,11 +35,6 @@ class AlreadyExistsError(CorError):
     pass
 
 
-class SyncError(CorError):
-    """Error during sync/maintenance operations."""
-    pass
-
-
 class ExternalServiceError(CorError):
     """Error communicating with external service (API call failed)."""
     pass

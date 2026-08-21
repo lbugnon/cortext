@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 import click
-from rapidfuzz import fuzz, process
-from simple_term_menu import TerminalMenu
 
+# NOTE: `rapidfuzz` (~12ms) and `simple_term_menu` (~9ms) are imported lazily
+# inside the two functions that need them. Neither is needed when a name
+# resolves exactly, which is the common case, so paying for them at import
+# time taxed every `cor` invocation - including each shell-completion Tab.
 from ..exceptions import NotFoundError
 from ..utils import get_notes_dir
 
@@ -62,6 +64,8 @@ def fuzzy_match(
 
     # Extract just stems for matching
     stems = [c[0] for c in candidates]
+
+    from rapidfuzz import fuzz, process
 
     # Use partial_ratio for good substring matching in filenames
     results = process.extract(
@@ -119,6 +123,8 @@ def show_picker(
 
     click.echo(f"\nMultiple matches for '{query}':")
 
+    from simple_term_menu import TerminalMenu
+
     menu = TerminalMenu(
         options,
         title="Select file (arrows to navigate, Enter to confirm, q to cancel):",
@@ -134,6 +140,36 @@ def show_picker(
 
     stem, is_archived, _ = matches[choice]
     return (stem, is_archived)
+
+
+def _pick_or_best_match(matches, name: str, auto_select_threshold: int):
+    """Resolve ambiguity: ask a human if one is present, otherwise be strict.
+
+    Non-interactive callers (scripts, git hooks, the nvim plugin) have nobody to
+    confirm with, so a weak guess must not be acted on. This used to return
+    matches[0] regardless of score, silently: with partial_ratio and
+    score_cutoff=50 a short query scores ~50 against almost anything, so
+    `cor rename old-a renamed-a` would rename an unrelated `via-flag` project
+    and report success. Destructive and invisible. Require real confidence, or
+    fail loudly.
+    """
+    if not sys.stdin.isatty():
+        best_stem, best_archived, best_score = matches[0]
+        if best_score < auto_select_threshold:
+            options = ", ".join(f"{s} ({sc}%)" for s, _, sc in matches[:5])
+            raise NotFoundError(
+                f"No confident match for '{name}' (best: {best_stem} at {best_score}%). "
+                f"Candidates: {options}. "
+                f"Use the exact name, or run interactively to pick from a list."
+            )
+        if len(matches) > 1:
+            click.echo(
+                f"Warning: Multiple matches found, using best: {best_stem}",
+                err=True,
+            )
+        return (best_stem, best_archived)
+
+    return show_picker(matches, name)
 
 
 def resolve_file_fuzzy(
@@ -181,32 +217,8 @@ def resolve_file_fuzzy(
         click.echo(f"Auto-selected: {stem}" + (" (archived)" if is_archived else ""))
         return (stem, is_archived)
 
-    # 4. Non-interactive mode (scripts, git hooks, the nvim plugin): there is
-    #    nobody to confirm with, so a weak guess must not be acted on.
-    #
-    #    This used to return matches[0] regardless of score, silently. With
-    #    partial_ratio and score_cutoff=50, a short query scores ~50 against
-    #    almost anything: `cor rename old-a renamed-a` would rename an
-    #    unrelated `via-flag` project and report success. Destructive and
-    #    invisible. Require real confidence, or fail loudly.
-    if not sys.stdin.isatty():
-        best_stem, best_archived, best_score = matches[0]
-        if best_score < auto_select_threshold:
-            options = ", ".join(f"{s} ({sc}%)" for s, _, sc in matches[:5])
-            raise NotFoundError(
-                f"No confident match for '{name}' (best: {best_stem} at {best_score}%). "
-                f"Candidates: {options}. "
-                f"Use the exact name, or run interactively to pick from a list."
-            )
-        if len(matches) > 1:
-            click.echo(
-                f"Warning: Multiple matches found, using best: {best_stem}",
-                err=True,
-            )
-        return (best_stem, best_archived)
-
-    # 5. Multiple matches or low confidence: show picker
-    return show_picker(matches, name)
+    # 4/5. Ambiguous: ask a human, or be strict when there isn't one.
+    return _pick_or_best_match(matches, name, auto_select_threshold)
 
 
 def get_file_path(stem: str, is_archived: bool) -> Path:
@@ -303,32 +315,8 @@ def resolve_task_fuzzy(
         click.echo(f"Auto-selected: {stem}" + (" (archived)" if is_archived else ""))
         return (stem, is_archived)
 
-    # 4. Non-interactive mode (scripts, git hooks, the nvim plugin): there is
-    #    nobody to confirm with, so a weak guess must not be acted on.
-    #
-    #    This used to return matches[0] regardless of score, silently. With
-    #    partial_ratio and score_cutoff=50, a short query scores ~50 against
-    #    almost anything: `cor rename old-a renamed-a` would rename an
-    #    unrelated `via-flag` project and report success. Destructive and
-    #    invisible. Require real confidence, or fail loudly.
-    if not sys.stdin.isatty():
-        best_stem, best_archived, best_score = matches[0]
-        if best_score < auto_select_threshold:
-            options = ", ".join(f"{s} ({sc}%)" for s, _, sc in matches[:5])
-            raise NotFoundError(
-                f"No confident match for '{name}' (best: {best_stem} at {best_score}%). "
-                f"Candidates: {options}. "
-                f"Use the exact name, or run interactively to pick from a list."
-            )
-        if len(matches) > 1:
-            click.echo(
-                f"Warning: Multiple matches found, using best: {best_stem}",
-                err=True,
-            )
-        return (best_stem, best_archived)
-
-    # 5. Multiple matches or low confidence: show picker
-    return show_picker(matches, name)
+    # 4/5. Ambiguous: ask a human, or be strict when there isn't one.
+    return _pick_or_best_match(matches, name, auto_select_threshold)
 
 
 def resolve_files(

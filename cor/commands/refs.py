@@ -138,7 +138,7 @@ def add(identifier: str, key: str | None, tags: tuple, no_edit: bool):
 @click.command(short_help="List all references")
 @click.option("--format", "-f", "fmt", type=click.Choice(["table", "short"]),
               default="table", help="Output format")
-@require_init
+@require_init(write=False)
 def list_refs(fmt: str):
     """List all references from references.bib.
 
@@ -193,7 +193,7 @@ def list_refs(fmt: str):
 
 @click.command(short_help="Show reference details")
 @click.argument("citekey", shell_complete=complete_ref)
-@require_init
+@require_init(write=False)
 def show(citekey: str):
     """Display detailed information about a reference.
 
@@ -324,7 +324,7 @@ def _search_references(entries: list, query: str) -> list[tuple]:
 @click.command(short_help="Search references by text")
 @click.argument("query")
 @click.option("--limit", "-n", type=int, default=20, help="Max results to show")
-@require_init
+@require_init(write=False)
 def search(query: str, limit: int):
     """Search references by citekey, authors, title, or abstract.
 
@@ -391,7 +391,7 @@ ref.add_command(search)
 
 
 @click.command(short_help="Validate bibliography metadata across all refs")
-@require_init
+@require_init(write=False)
 def validate_refs():
     """Validate all references in references.bib and matching ref markdown files.
 

@@ -1,3 +1,7 @@
+---
+modified: 2026-07-31 23:54
+---
+
 # Nvim Integration
 
 Cortex uses `[Title](stem.md)` for internal link targets, which enables

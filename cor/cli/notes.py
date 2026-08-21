@@ -1062,7 +1062,7 @@ def expand(name: str):
 
 @cli.command()
 @click.argument("query")
-@require_init
+@require_init(write=False)
 def link(query: str):
     """Print a [Title](stem.md) link for a note. Suitable for piping.
 

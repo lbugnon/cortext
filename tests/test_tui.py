@@ -145,3 +145,67 @@ parent: project
     assert post['status'] == 'active'
 
 
+
+
+class TestRunCorInProcess:
+    """The tree app dispatches into the click group instead of spawning `cor`.
+
+    It used to shell out per keystroke-driven action, paying the whole
+    interpreter startup each time. These tests pin the in-process contract:
+    success returns None, failure returns a message rather than raising, and
+    the COR_VAULT pin is always restored.
+    """
+
+    def _app(self, vault):
+        from cor.tui.tree_app import ProjectTreeApp
+
+        return ProjectTreeApp(focus="", notes_dir=vault)
+
+    def test_success_returns_none_and_applies_change(self, temp_vault):
+        vault = temp_vault
+        (vault / "proj.md").write_text("---\ntype: project\nstatus: active\n---\n\n# Proj\n")
+        (vault / "proj.task_a.md").write_text(
+            "---\ntype: task\nstatus: todo\n---\n\n# Task A\n"
+        )
+
+        # 'active' rather than 'done': terminal statuses trigger archiving,
+        # which moves the file and would obscure what this test is checking.
+        assert self._app(vault)._run_cor("mark", "proj.task_a", "active") is None
+        assert "status: active" in (vault / "proj.task_a.md").read_text()
+
+    def test_failure_returns_message_instead_of_raising(self, temp_vault):
+        err = self._app(temp_vault)._run_cor("mark", "does-not-exist-anywhere", "done")
+
+        assert err, "a failing command must report something, not fail silently"
+        assert isinstance(err, str)
+
+    def test_unknown_command_is_reported(self, temp_vault):
+        assert self._app(temp_vault)._run_cor("no-such-command")
+
+    def test_cor_vault_pin_is_restored(self, temp_vault, monkeypatch):
+        import os
+
+        monkeypatch.setenv("COR_VAULT", "/sentinel/value")
+        self._app(temp_vault)._run_cor("no-such-command")
+        assert os.environ["COR_VAULT"] == "/sentinel/value"
+
+    def test_cor_vault_absence_is_restored(self, temp_vault, monkeypatch):
+        import os
+
+        monkeypatch.delenv("COR_VAULT", raising=False)
+        self._app(temp_vault)._run_cor("no-such-command")
+        assert "COR_VAULT" not in os.environ
+
+    def test_does_not_spawn_a_subprocess(self, temp_vault, monkeypatch):
+        """The whole point of the change: no new `cor` process."""
+        import subprocess
+
+        def fail(*a, **k):
+            raise AssertionError(f"spawned a subprocess: {a!r}")
+
+        monkeypatch.setattr(subprocess, "run", fail)
+        monkeypatch.setattr(subprocess, "call", fail)
+        (temp_vault / "proj.md").write_text(
+            "---\ntype: project\nstatus: active\n---\n\n# Proj\n"
+        )
+        assert self._app(temp_vault)._run_cor("mark", "proj", "active") is None

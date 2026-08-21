@@ -4,7 +4,7 @@ modified: {date}
 ---
 # Backlog
 
-Capture anything here. Process with `cor process`.
+Capture anything here. Process with `cor inbox process`.
 
 ## Inbox
 

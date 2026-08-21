@@ -190,6 +190,31 @@ def parse_search_query(query: str) -> tuple[str, dict]:
     return " ".join(clean_parts), filters
 
 
+def note_matches_filters(note, filters: dict) -> bool:
+    """Check one note's metadata against parsed search filters.
+
+    Shared by the ripgrep path (`filter_matches`) and the filter-only listing
+    path in `cli/search_cmd.py`, which each had their own copy of these three
+    checks. Two copies of "what does status:/#tag/project: mean" is one copy too
+    many - they can answer the same query differently.
+    """
+    if "status" in filters and note.status != filters["status"]:
+        return False
+
+    if "tags" in filters:
+        if not set(filters["tags"]).issubset(set(note.tags or [])):
+            return False
+
+    if "project" in filters:
+        # Either a descendant (project.task.md) or the project file itself.
+        project = filters["project"]
+        stem = note.path.stem
+        if not (stem == project or stem.startswith(f"{project}.")):
+            return False
+
+    return True
+
+
 def filter_matches(
     matches: list[SearchMatch],
     filters: dict,
@@ -229,29 +254,7 @@ def filter_matches(
         if note is None:
             continue
 
-        # Apply filters
-        match_ok = True
-
-        if "status" in filters and note.status != filters["status"]:
-            match_ok = False
-
-        if "tags" in filters and note.tags:
-            note_tags = set(note.tags)
-            required_tags = set(filters["tags"])
-            if not required_tags.issubset(note_tags):
-                match_ok = False
-        elif "tags" in filters and not note.tags:
-            match_ok = False
-
-        if "project" in filters:
-            # Check if file belongs to project: either a descendant
-            # (project.task.md) or the project file itself (project.md).
-            project = filters["project"]
-            stem = match.file.stem
-            if not (stem == project or stem.startswith(f"{project}.")):
-                match_ok = False
-
-        if match_ok:
+        if note_matches_filters(note, filters):
             filtered.append(match)
 
     return filtered

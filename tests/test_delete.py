@@ -7,7 +7,7 @@ from cor.cli import cli
 
 @pytest.fixture
 def initialized_vault(temp_vault, runner, monkeypatch):
-    monkeypatch.setenv("CORTEX_VAULT", str(temp_vault))
+    monkeypatch.setenv("COR_VAULT", str(temp_vault))
     monkeypatch.chdir(temp_vault)
     subprocess.run(["git", "init"], cwd=temp_vault, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=temp_vault, capture_output=True)

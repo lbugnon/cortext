@@ -8,6 +8,7 @@ import click
 from ..exceptions import ValidationError, NotFoundError, ConfigError
 from . import cli
 from ..config import (
+    is_vault_initialized,
     load_config,
     config_file,
     set_vault_path,
@@ -20,6 +21,14 @@ from ..config import (
     set_remote_inbox,
     get_timezone,
     set_timezone,
+    add_vault,
+    remove_vault,
+    get_vaults,
+    get_default_vault,
+    set_default_vault,
+    resolve_vault,
+    vault_name_for,
+    vault_source_label,
 )
 from ..utils import get_notes_dir, require_init
 
@@ -75,25 +84,38 @@ def config_cmd(key: str | None, value: str | None):
 
     elif key == "vault":
         if value is None:
-            # Show current vault configuration
-            notes_dir = get_notes_dir()
-            config_data = load_config()
-            env_vault = os.environ.get("CORTEX_VAULT")
+            # Show the resolution rules in the order they are actually
+            # applied, marking the one that won. Getting this order wrong is
+            # how you end up writing to the wrong vault.
+            notes_dir, source = resolve_vault()
+            env_vault = os.environ.get("COR_VAULT")
+            default_name = get_default_vault()
+            vaults = get_vaults()
 
             click.echo(click.style("Vault Configuration", bold=True))
             click.echo()
 
-            if env_vault:
-                click.echo(f"CORTEX_VAULT env: {env_vault} " + click.style("(active)", fg="green"))
-            if config_data.get("vault"):
-                status = "(active)" if not env_vault else "(overridden)"
-                click.echo(f"Config file: {config_data['vault']} " + click.style(status, fg="yellow" if env_vault else "green"))
-            if not env_vault and not config_data.get("vault"):
-                click.echo(f"Current directory: {Path.cwd()} " + click.style("(active)", fg="green"))
+            def _rule(rule_source: str, label: str, detail: str) -> None:
+                active = rule_source == source
+                mark = click.style("(active)", fg="green") if active else click.style("(unused)", fg="yellow")
+                click.echo(f"  {label}: {detail} {mark}")
+
+            click.echo("Resolution order:")
+            _rule("cwd", "1. cwd", f"nearest ancestor with backlog.md, from {Path.cwd()}")
+            _rule("env", "2. COR_VAULT", env_vault or "(unset)")
+            _rule(
+                "config",
+                "3. default vault",
+                f"{default_name} -> {vaults[default_name]}" if default_name else "(none registered)",
+            )
 
             click.echo()
-            click.echo(f"Active vault: {click.style(str(notes_dir), fg='cyan', bold=True)}")
-            if (notes_dir / "backlog.md").exists():
+            click.echo(
+                f"Active vault: {click.style(vault_name_for(notes_dir), fg='cyan', bold=True)}"
+                f"  {click.style(str(notes_dir), fg='cyan')}"
+                f"  ({vault_source_label(source)})"
+            )
+            if is_vault_initialized(notes_dir):
                 click.echo(click.style("  (initialized)", fg="green"))
             else:
                 click.echo(click.style("  (not initialized - run 'cor init')", fg="yellow"))
@@ -173,6 +195,103 @@ def config_cmd(key: str | None, value: str | None):
             click.echo(f"Config saved to: {config_file()}")
             click.echo()
             click.echo("Messages sent to your Telegram bot will be pulled during 'cor sync'")
+
+
+@click.group(name="vault")
+def vault_group():
+    """Manage named vaults.
+
+    Naming your vaults lets the interactive shell show which one you are in
+    and lets you switch with ':vault <name>'.
+
+    \b
+    Examples:
+      cor vault list                       Show registered vaults
+      cor vault add work ~/notes/work      Register a vault
+      cor vault default work               Set the fallback vault
+      cor vault rm work                    Unregister (does not delete files)
+    """
+
+
+@vault_group.command(name="list")
+def vault_list():
+    """List registered vaults, marking the active and default ones."""
+    vaults = get_vaults()
+    if not vaults:
+        click.echo("No vaults registered. Run 'cor vault add <name> <path>'.")
+        return
+
+    try:
+        active, source = resolve_vault()
+        active = active.resolve()
+    except ConfigError:
+        active, source = None, None
+    default_name = get_default_vault()
+
+    for name in sorted(vaults):
+        path = vaults[name]
+        marks = []
+        if active is not None and path.expanduser().resolve() == active:
+            marks.append(click.style(f"active, {vault_source_label(source)}", fg="green"))
+        if name == default_name:
+            marks.append(click.style("default", fg="cyan"))
+        if not is_vault_initialized(path):
+            marks.append(click.style("not initialized", fg="yellow"))
+        suffix = f"  ({', '.join(marks)})" if marks else ""
+        click.echo(f"  {name:<15} {path}{suffix}")
+
+    # The active vault may have been discovered from cwd without ever being
+    # registered - say so rather than silently listing an incomplete picture.
+    if active is not None and not any(
+        p.expanduser().resolve() == active for p in vaults.values()
+    ):
+        click.echo()
+        click.echo(
+            f"Active vault {click.style(str(active), fg='cyan')} is not registered "
+            f"({vault_source_label(source)}). Add it with 'cor vault add <name> {active}'."
+        )
+
+
+@vault_group.command(name="add")
+@click.argument("name")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def vault_add(name: str, path: Path):
+    """Register PATH as a vault called NAME."""
+    resolved = path.expanduser().resolve()
+    add_vault(name, resolved)
+    click.echo(click.style(f"Registered vault '{name}' -> {resolved}", fg="green"))
+    if not is_vault_initialized(resolved):
+        click.echo(
+            click.style(
+                f"  Warning: no backlog.md there, so it is not an initialized vault. "
+                f"Run 'cor init' inside it.",
+                fg="yellow",
+            )
+        )
+
+
+@vault_group.command(name="rm")
+@click.argument("name")
+def vault_rm(name: str):
+    """Unregister the vault called NAME. Files on disk are untouched."""
+    remove_vault(name)
+    click.echo(click.style(f"Unregistered vault '{name}'", fg="green"))
+
+
+@vault_group.command(name="default")
+@click.argument("name", required=False)
+def vault_default(name: str | None):
+    """Show or set the vault used when cwd and COR_VAULT say nothing."""
+    if name is None:
+        current = get_default_vault()
+        if current is None:
+            click.echo("No default vault. Run 'cor vault add <name> <path>'.")
+        else:
+            click.echo(f"Default vault: {click.style(current, fg='cyan', bold=True)} -> {get_vaults()[current]}")
+        return
+
+    set_default_vault(name)
+    click.echo(click.style(f"Default vault set to '{name}'", fg="green"))
 
 
 @cli.command()

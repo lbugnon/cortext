@@ -6,7 +6,8 @@ import frontmatter
 
 from cor.core.files import (
     FileIterator,
-    NoteFileManager,
+    load_note,
+    save_note,
     get_all_note_files,
     get_project_files,
     find_children
@@ -184,23 +185,22 @@ class TestFileIterator:
         assert count == 4  # task1, task2, group1, group1.subtask
 
 
-class TestNoteFileManager:
-    """Test NoteFileManager functionality."""
+class TestLoadAndSaveNote:
+    """The canonical note I/O pair, used ~14 times by sync/runner.py.
+
+    These cases previously exercised NoteFileManager's methods; that class had
+    no production callers and was removed, but these two functions are live, so
+    the coverage was retargeted rather than deleted.
+    """
 
     @pytest.fixture
     def notes_dir(self, tmp_path):
-        """Create a temporary notes directory."""
         notes_dir = tmp_path / "notes"
         notes_dir.mkdir()
         (notes_dir / "archive").mkdir()
         return notes_dir
 
-    @pytest.fixture
-    def file_mgr(self, notes_dir):
-        """Create a NoteFileManager instance."""
-        return NoteFileManager(notes_dir)
-
-    def test_load_note(self, file_mgr, notes_dir):
+    def test_load_note(self, notes_dir):
         """Test loading a note with frontmatter."""
         note_path = notes_dir / "test.md"
         note_path.write_text("""---
@@ -210,20 +210,32 @@ status: todo
 # Test Note
 """)
 
-        post = file_mgr.load_note(note_path)
+        post = load_note(note_path)
 
         assert post is not None
         assert post["title"] == "Test"
         assert post["status"] == "todo"
         assert "# Test Note" in post.content
 
-    def test_load_note_nonexistent(self, file_mgr, notes_dir):
+    def test_load_note_nonexistent(self, notes_dir):
         """Test loading non-existent note returns None."""
-        result = file_mgr.load_note(notes_dir / "nonexistent.md")
+        assert load_note(notes_dir / "nonexistent.md") is None
 
-        assert result is None
+    def test_load_note_accepts_str_path(self, notes_dir):
+        """sync/runner.py passes plain strings in places."""
+        note_path = notes_dir / "test.md"
+        note_path.write_text("---\ntitle: T\n---\nbody\n")
 
-    def test_save_note(self, file_mgr, notes_dir):
+        assert load_note(str(note_path)) is not None
+
+    def test_load_note_unparseable_returns_none(self, notes_dir):
+        """Malformed frontmatter must not raise into callers."""
+        note_path = notes_dir / "bad.md"
+        note_path.write_text("---\n: : not yaml : :\n---\nbody\n")
+
+        assert load_note(note_path) is None
+
+    def test_save_note(self, notes_dir):
         """Test saving a note with frontmatter."""
         note_path = notes_dir / "test.md"
 
@@ -231,86 +243,25 @@ status: todo
         post["title"] = "Test"
         post["status"] = "done"
 
-        file_mgr.save_note(note_path, post)
+        save_note(note_path, post)
 
-        # Verify saved content
         loaded = frontmatter.load(note_path)
         assert loaded["title"] == "Test"
         assert loaded["status"] == "done"
         assert loaded.content == "Content here"
 
-    def test_extract_title(self, file_mgr):
-        """Test extracting title from note content."""
-        post = frontmatter.Post("# My Title\n\nContent here")
-
-        title = file_mgr.extract_title(post)
-
-        assert title == "My Title"
-
-    def test_extract_title_no_heading(self, file_mgr):
-        """Test extracting title when no heading exists."""
-        post = frontmatter.Post("Just content")
-
-        title = file_mgr.extract_title(post, fallback_stem="fallback")
-
-        assert title == "fallback"
-
-    def test_extract_metadata(self, file_mgr, notes_dir):
-        """Test extracting metadata from file."""
+    def test_save_note_preserves_key_order(self, notes_dir):
+        """sort_keys=False is deliberate: it keeps vault diffs small."""
         note_path = notes_dir / "test.md"
-        note_path.write_text("""---
-type: task
-status: todo
-priority: high
----
-# Content
-""")
 
-        metadata = file_mgr.extract_metadata(note_path)
+        post = frontmatter.Post("body")
+        post["zebra"] = 1
+        post["alpha"] = 2
 
-        assert metadata["type"] == "task"
-        assert metadata["status"] == "todo"
-        assert metadata["priority"] == "high"
+        save_note(note_path, post)
 
-    def test_exists_in_active(self, file_mgr, notes_dir):
-        """Test checking if note exists in active directory."""
-        note_path = notes_dir / "test.md"
-        note_path.write_text("content")
-
-        assert file_mgr.exists("test")
-        assert not file_mgr.exists("nonexistent")
-
-    def test_exists_in_archive(self, file_mgr, notes_dir):
-        """Test checking if note exists in archive."""
-        archive_dir = notes_dir / "archive"
-        note_path = archive_dir / "archived.md"
-        note_path.write_text("content")
-
-        assert file_mgr.exists("archived", include_archive=True)
-        assert not file_mgr.exists("archived", include_archive=False)
-
-    def test_find_note_in_active(self, file_mgr, notes_dir):
-        """Test finding note in active directory."""
-        note_path = notes_dir / "test.md"
-        note_path.write_text("content")
-
-        result = file_mgr.find_note("test")
-
-        assert result is not None
-        assert result[0] == note_path
-        assert result[1] is False  # not archived
-
-    def test_find_note_in_archive(self, file_mgr, notes_dir):
-        """Test finding note in archive."""
-        archive_dir = notes_dir / "archive"
-        note_path = archive_dir / "archived.md"
-        note_path.write_text("content")
-
-        result = file_mgr.find_note("archived")
-
-        assert result is not None
-        assert result[0] == note_path
-        assert result[1] is True  # archived
+        text = note_path.read_text()
+        assert text.index("zebra") < text.index("alpha")
 
 
 class TestConvenienceFunctions:

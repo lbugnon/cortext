@@ -1,3 +1,7 @@
+---
+modified: 2026-07-31 23:54
+---
+
 <div align="center">
 
 <img src="logo.png" alt="Cor Logo" width="120" height="120">
@@ -43,6 +47,14 @@ pip install -e .
   
   # Via conda
   conda install -c conda-forge ripgrep
+  ```
+
+- **fd** - Required only by the Neovim plugin (`cor init` offers to install it),
+  which lists notes and finds backlinks in Lua rather than shelling out to `cor`.
+  See [docs/nvim.md](docs/nvim.md).
+  ```bash
+  sudo apt-get install fd-find    # Ubuntu/Debian (binary is `fdfind`)
+  sudo pacman -S fd               # Arch Linux
   ```
 
 ## Development
@@ -184,6 +196,8 @@ tags: [coding, urgent]
 | `cor inbox process` | Interactively file backlog items into projects |
 | `cor ref <add\|list\|show\|edit\|del\|search\|validate> …` | Manage bibliography references |
 | `cor config [vault\|inbox\|verbosity\|timezone] …` | Show or set configuration |
+| `cor vault <list\|add\|rm\|default> …` | Manage named vaults |
+| `cor` / `cor shell` | Open the interactive shell pinned to one vault |
 | `cor calendar <auth\|sync\|status\|logout>` | Google Calendar integration (needs `cor-text[calendar]`) |
 | `cor maintenance sync` | Manually run archive/status sync |
 | `cor maintenance hooks <install\|uninstall>` | Install/remove the pre-commit hook and completion |
@@ -326,44 +340,93 @@ cor ref add 10.1101/2025.07.24.666581 --key smith2026transformers --tags ml --ta
 
 ## Configuration
 
-### Vault Path Setup
+### Vaults
 
-Cor automatically configures your vault path in `~/.config/cor/config.yaml` when you run `cor init`. You can change it anytime:
-
-```bash
-# Set during initial setup
-cor init
-
-# Or reconfigure later
-cor config vault /path/to/notes
-```
-
-Once configured, you can run `cor` commands from any directory:
+`cor init` registers the directory as a vault in `~/.config/cor/config.yaml`. You can have as many vaults as you like:
 
 ```bash
-# Commands work from anywhere after init
-cd /tmp
-cor daily
-cor new task my-project.quick-idea
+cor vault add work ~/notes/work
+cor vault add personal ~/notes/personal
+cor vault list                      # shows which is active, and why
+cor vault default work              # used when nothing else says otherwise
 ```
+
+**Which vault am I in?** Cor resolves it in this order, and the first rule that matches wins:
+
+1. **cwd** — the nearest ancestor directory containing `backlog.md` (the vault marker)
+2. **`COR_VAULT`** environment variable
+3. **the default vault** from the config file
+
+Rule 1 means `cd ~/notes/work && cor daily` always does the obvious thing. It also means a directory that happens to contain a `backlog.md` is treated as a vault, so `cor` run inside an unrelated checkout may not target what you expect. `cor vault list` and `cor status` both print the active vault and which rule produced it.
+
+Rule 3 is a guess: nothing about your current location said which vault you meant. So **commands that write refuse to guess**. Outside a vault, `cor new task adas` asks which vault to use, and in a script or git hook — where there is nobody to ask — it fails with an error rather than writing to the wrong place. Read-only commands like `status` and `search` still fall back to the default silently.
+
+To avoid being asked at all, use the interactive shell, `cd` into a vault, or set `COR_VAULT`.
+
+### Interactive shell
+
+Run `cor` with no command to open a shell pinned to one vault:
+
+```
+$ cor
+
+  vault: work  (/home/user/notes/work)
+  42 notes, 6 projects
+  Type a command without the 'cor' prefix.  :help for shell commands, :quit to exit.
+
+cor(work)> new task adas
+Created task at /home/user/notes/work/adas.md
+cor(work)> :vault personal
+Switched to personal  (/home/user/notes/personal)
+cor(personal)>
+```
+
+The vault name is in the prompt on every line, so there is never a question about where a command will land. Commands are typed without the `cor` prefix and Tab-completion works exactly as it does in your shell. `cor shell` does the same thing explicitly.
+
+Shell commands are prefixed with `:` to keep them distinct from cor's own:
+
+| Command | Description |
+|---------|-------------|
+| `:vault [name]` | Show the active vault, or switch to another |
+| `:vaults` | List registered vaults |
+| `:cd <path>` | Move within the vault |
+| `:pwd` | Show the current directory |
+| `:help` | Shell command help |
+| `:quit` | Exit (also Ctrl-D, `exit`, `quit`) |
+
+The shell is additive — every command still works as `cor <command>` from scripts, git hooks, and the Neovim plugin.
 
 ### Config File Format
 
 `~/.config/cor/config.yaml`:
 ```yaml
-vault: /home/user/notes        # Vault path (required)
+vaults:                        # Named vaults
+  work: /home/user/notes/work
+  personal: /home/user/notes/personal
+default: work                  # Used when cwd and COR_VAULT say nothing
+vault: /home/user/notes/work   # Legacy key, mirrors the default
 verbosity: 1                   # 0=silent, 1=normal, 2=verbose, 3=debug
+timezone: UTC                  # For calendar event times
 remote_inbox: 123456:ABC...    # Telegram bot token (optional)
+vault_state:                   # Per-vault state, so focus doesn't leak
+  work:
+    focus: myproject
 ```
-```
+
+A config with only the old single `vault:` key keeps working — it is read as a one-entry registry.
 
 ### Configuration Commands
 
 ```bash
-cor config                # Display current config
-cor config vault <path>   # Set vault path
-cor config verbosity <0-3> # Set verbosity level
-cor config inbox <token>  # Configure Telegram inbox
+cor config                  # Display current config
+cor config vault            # Show the active vault and resolution order
+cor config vault <path>     # Set vault path
+cor config verbosity <0-3>  # Set verbosity level
+cor config inbox <token>    # Configure Telegram inbox
+cor vault list              # List named vaults
+cor vault add <name> <path> # Register a vault
+cor vault rm <name>         # Unregister a vault (files untouched)
+cor vault default <name>    # Set the fallback vault
 ```
 
 ### Mobile Inbox via Telegram

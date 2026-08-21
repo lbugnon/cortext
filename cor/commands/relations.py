@@ -175,7 +175,7 @@ def _print_group(label: str, stems: list[str], notes_by_stem: dict, color: str):
 
 @click.command(name="show", short_help="Show all relations for a note")
 @click.argument("note", shell_complete=complete_relation_target)
-@require_init
+@require_init(write=False)
 def rel_show(note: str):
     """Show every relation for NOTE, including computed inverses.
 

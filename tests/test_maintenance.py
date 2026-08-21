@@ -574,3 +574,56 @@ class TestNormalizeLinkPrefixes:
 
         runner = MaintenanceRunner(vault)
         assert runner.normalize_link_prefixes(parent) is False
+
+
+class TestSyncDoesNotMoveTheProcess:
+    """`cor sync` used to chdir into the vault and then to its PARENT.
+
+    `os.chdir("..")` did not restore the previous directory, and any early
+    raise skipped it entirely. Under the long-lived interactive shell that left
+    the session sitting outside its own vault. Git calls are now pinned with
+    cwd= instead.
+    """
+
+    def _run_sync(self, tmp_path, vault, monkeypatch, args):
+        import os
+        from click.testing import CliRunner
+
+        from cor.cli import cli
+
+        outside = tmp_path / "elsewhere"
+        outside.mkdir(exist_ok=True)
+        monkeypatch.setenv("COR_VAULT", str(vault))
+        monkeypatch.chdir(outside)
+
+        before = os.getcwd()
+        CliRunner().invoke(cli, args)
+        return before, os.getcwd()
+
+    def test_cwd_unchanged_on_success_or_failure(
+        self, tmp_path, temp_vault, monkeypatch
+    ):
+        before, after = self._run_sync(
+            tmp_path, temp_vault, monkeypatch, ["sync", "--no-push", "--no-pull"]
+        )
+        assert before == after
+
+    def test_cwd_unchanged_when_sync_raises(self, tmp_path, temp_vault, monkeypatch):
+        # No remote configured, so push fails - the early-return path that used
+        # to skip the chdir restore entirely.
+        before, after = self._run_sync(tmp_path, temp_vault, monkeypatch, ["sync"])
+        assert before == after
+
+    def test_source_has_no_chdir(self):
+        """Guard against the pattern coming back."""
+        from pathlib import Path
+
+        import cor
+
+        # NB: `cor.cli.maintenance` resolves to the click Group of that name,
+        # not the module - cli/__init__.py imports the group over it.
+        src = (Path(cor.__file__).parent / "cli" / "maintenance.py").read_text()
+        code = "\n".join(
+            ln for ln in src.split("\n") if not ln.lstrip().startswith("#")
+        )
+        assert "os.chdir" not in code

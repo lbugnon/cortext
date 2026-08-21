@@ -15,9 +15,9 @@ from typing import Any
 import frontmatter
 
 from ..schema import VALID_PRIORITY, VALID_PROJECT_STATUS, VALID_TASK_STATUS, STATUS_SYMBOLS
-from ..core.links import LinkManager, LinkPatterns
+from ..core.links import LinkPatterns
 from ..core.archive import ArchiveManager
-from ..core.files import FileIterator, NoteFileManager
+from ..core.files import FileIterator, load_note, save_note
 from ..dependencies import RELATION_FIELDS
 
 
@@ -42,24 +42,6 @@ class SyncResult:
 
 
 
-def load_note(filepath: str | Path) -> frontmatter.Post | None:
-    """Load a note file and return the frontmatter Post object."""
-    path = Path(filepath)
-    if not path.exists():
-        return None
-    try:
-        return frontmatter.load(path)
-    except Exception:
-        return None
-
-
-def save_note(filepath: str | Path, post: frontmatter.Post) -> None:
-    """Save a frontmatter Post object to a file."""
-    path = Path(filepath)
-    with open(path, 'wb') as f:
-        frontmatter.dump(post, f, sort_keys=False)
-
-
 def get_frontmatter(filepath: str) -> dict | None:
     """Parse and return frontmatter as dict."""
     post = load_note(filepath)
@@ -78,33 +60,6 @@ def update_field(filepath: str | Path, field: str, value: Any, dry_run: bool = F
         return False
 
     post[field] = value
-    if not dry_run:
-        save_note(filepath, post)
-    return True
-
-
-def add_field_after(filepath: str | Path, field: str, value: Any, after_field: str, dry_run: bool = False) -> bool:
-    """Add a field after another field in frontmatter. Returns True if added."""
-    post = load_note(filepath)
-    if post is None:
-        return False
-
-    if field in post.metadata:
-        return False
-
-    # Reconstruct metadata with new field after the target field
-    new_metadata = {}
-    added = False
-    for key, val in post.metadata.items():
-        new_metadata[key] = val
-        if key == after_field:
-            new_metadata[field] = value
-            added = True
-
-    if not added:
-        new_metadata[field] = value
-
-    post.metadata = new_metadata
     if not dry_run:
         save_note(filepath, post)
     return True
@@ -317,10 +272,8 @@ class MaintenanceRunner:
         self.dry_run = dry_run
 
         # Initialize new managers
-        self.link_mgr = LinkManager(notes_dir)
         self.archive_mgr = ArchiveManager(notes_dir)
         self.file_iter = FileIterator(notes_dir)
-        self.file_mgr = NoteFileManager(notes_dir)
 
     def find_file_in_notes(self, filename: str) -> Path | None:
         """Find a file in notes/ or notes/archive/."""

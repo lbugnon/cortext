@@ -46,7 +46,7 @@ class CorCLI(click.Group):
             _handle_cor_error(e)
 
 
-@click.group(cls=CorCLI, context_settings={
+@click.group(cls=CorCLI, invoke_without_command=True, context_settings={
     "help_option_names": ["-h", "--help"],
     "max_content_width": 100,
 })
@@ -59,14 +59,53 @@ class CorCLI(click.Group):
 @click.pass_context
 def cli(ctx, verbose: int):
     """Cor - Plain text knowledge management for the terminal.
-    
+
     A lightweight tool for managing projects, tasks, and notes using
-    plain text files and git. 
+    plain text files and git.
+
+    Run `cor` with no command to open the interactive shell, which pins one
+    vault for the session and shows its name in the prompt.
     """
+    # resilient_parsing means click is resolving a context for completion,
+    # not really running us. Doing anything here would recurse: the shell's
+    # completer calls back into this group.
+    if ctx.resilient_parsing:
+        return
+
+    # click.echo consults the active context for its colour default, so setting
+    # this once here covers every echo in the command that follows - including
+    # the ~530 call sites that pass an explicit fg=.
+    from ..ui.theme import no_color_requested
+
+    if no_color_requested():
+        ctx.color = False
+
     if verbose > 0:
         current_level = get_verbosity()
         new_level = min(current_level + verbose, 3)
         set_verbosity(new_level)
+
+    if ctx.invoked_subcommand is None:
+        # Bare `cor` opens the shell. Only when a human is present: piping
+        # into `cor` used to print help, and scripts should keep getting
+        # something inert rather than a hung prompt.
+        if not sys.stdin.isatty():
+            click.echo(ctx.get_help())
+            return
+        from ..repl import run_shell
+        run_shell(cli)
+
+
+@cli.command(name="shell")
+def shell_cmd():
+    """Open the interactive shell (same as running `cor` with no command).
+
+    Pins one vault for the session, shows its name in every prompt, and lets
+    you run commands without the `cor` prefix. Use ':vault <name>' to switch
+    and ':help' for the shell's own commands.
+    """
+    from ..repl import run_shell
+    run_shell(cli)
 
 
 def _install_pre_commit_hook() -> None:
@@ -220,7 +259,7 @@ def _uninstall_pre_commit_hook() -> None:
 
 # Import and register all commands
 from .init import init, example_vault
-from .config import config_cmd, focus
+from .config import config_cmd, focus, vault_group
 from .notes import new, edit, tag, delete, mark, due, expand, link
 from .maintenance import sync, maintenance
 from ..commands.refactor import rename, group
@@ -238,6 +277,7 @@ from .search_cmd import search
 cli.add_command(init)
 cli.add_command(example_vault)
 cli.add_command(config_cmd)
+cli.add_command(vault_group)
 cli.add_command(focus)
 cli.add_command(inbox)
 cli.add_command(new)
@@ -263,6 +303,7 @@ cli.add_command(weekly)
 cli.add_command(tree)
 cli.add_command(status)
 cli.add_command(search)
+cli.add_command(shell_cmd)
 
 # Calendar commands group
 @cli.group(name="calendar", cls=CorCLI)

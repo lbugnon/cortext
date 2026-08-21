@@ -1,6 +1,5 @@
 """Maintenance, sync, and refactoring commands for Cor CLI."""
 
-import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -35,11 +34,16 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
     """
     notes_dir = get_notes_dir()
 
-    os.chdir(notes_dir)
+    # Every git call below is pinned with cwd=notes_dir rather than chdir'ing
+    # the process. The old code did `os.chdir(notes_dir)` here and
+    # `os.chdir("..")` at the end, which did not restore the previous
+    # directory - it moved to the vault's parent - and any early raise skipped
+    # it entirely. In the long-lived interactive shell that left the session
+    # sitting outside its own vault while the prompt still claimed otherwise.
     # Check if we're in a git repo
     result = subprocess.run(
         ["git", "rev-parse", "--git-dir"],
-        capture_output=True, text=True
+        capture_output=True, text=True, cwd=notes_dir
     )
     if result.returncode != 0:
         raise ExternalServiceError("Not in a git repository.")
@@ -80,7 +84,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
     # Step 1: Commit local changes first (if any) so the working tree is clean before pull
     result = subprocess.run(
         ["git", "status", "--porcelain"],
-        capture_output=True, text=True
+        capture_output=True, text=True, cwd=notes_dir
     )
     changes = result.stdout.strip()
 
@@ -100,7 +104,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
             else:
                 click.echo(f"  {status_char} {filename}")
 
-        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "add", "-A"], check=True, cwd=notes_dir)
 
         commit_msg = message
         if not commit_msg:
@@ -110,7 +114,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
         click.echo(f"\nCommitting: {commit_msg}")
         result = subprocess.run(
             ["git", "commit", "-m", commit_msg],
-            capture_output=True, text=True
+            capture_output=True, text=True, cwd=notes_dir
         )
         if result.returncode != 0:
             raise ExternalServiceError(f"Commit failed: {result.stderr}")
@@ -122,7 +126,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
         click.echo("Pulling from remote...")
         result = subprocess.run(
             ["git", "pull"],
-            capture_output=True, text=True
+            capture_output=True, text=True, cwd=notes_dir
         )
         if result.returncode != 0:
             if "no tracking information" in result.stderr:
@@ -135,7 +139,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
         # Check for merge conflicts after pull
         conflict_result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=U"],
-            capture_output=True, text=True
+            capture_output=True, text=True, cwd=notes_dir
         )
         if conflict_result.stdout.strip():
             conflicts = conflict_result.stdout.strip().split("\n")
@@ -156,7 +160,7 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
         click.echo("Pushing to remote...")
         result = subprocess.run(
             ["git", "push"],
-            capture_output=True, text=True
+            capture_output=True, text=True, cwd=notes_dir
         )
         if result.returncode != 0:
             if "no upstream branch" in result.stderr:
@@ -167,7 +171,6 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
             click.echo(click.style("Synced!", fg="green"))
     else:
         click.echo(click.style("Done (not pushed).", fg="green"))
-    os.chdir("..")  # Return to previous directory
 
 
 @cli.group()
@@ -205,7 +208,7 @@ def maintenance_sync(sync_all: bool):
         # Get git-modified files
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True, text=True
+            capture_output=True, text=True, cwd=notes_dir
         )
         files = [f for f in result.stdout.strip().split("\n")
                  if f.endswith(".md") and not f.startswith("templates/") and f]

@@ -875,3 +875,73 @@ class TestGroup:
         result = runner.invoke(cli, ["group", "myproj.existinggroup", "task1"])
         assert result.exit_code != 0
         assert "exists" in result.output.lower()
+
+
+class TestExampleVault:
+    """`cor example-vault` builds the demo content in-process.
+
+    It previously spawned `cor` 48 times and passed a `-t` flag that `new`
+    never accepted, so every task/note creation failed and the command
+    produced a 3-file vault while still exiting 0. These tests guard both the
+    output and the silence.
+    """
+
+    def test_builds_a_populated_vault(self, runner, temp_vault):
+        result = runner.invoke(cli, ["example-vault"])
+
+        assert result.exit_code == 0, result.output
+        notes = list(temp_vault.glob("*.md"))
+        assert len(notes) > 20, f"expected a populated vault, got {len(notes)}: {notes}"
+
+    def test_reports_no_command_failures(self, runner, temp_vault):
+        result = runner.invoke(cli, ["example-vault"])
+
+        assert "Error running:" not in result.output, result.output
+        assert "No such option" not in result.output, result.output
+
+    def test_creates_projects_tasks_and_archive(self, runner, temp_vault):
+        runner.invoke(cli, ["example-vault"])
+
+        stems = {p.stem for p in temp_vault.glob("*.md")}
+        assert "foundation_model" in stems
+        # Tasks are dotted children of their project.
+        assert any("." in s for s in stems), "no task-level notes were created"
+        assert list((temp_vault / "archive").glob("*.md")), "no archived examples"
+
+    def test_rename_demo_is_applied(self, runner, temp_vault):
+        """The script renames evaluation_suite -> eval-suite to demo `rename`.
+
+        Worth pinning: it is the one step whose success is invisible in a file
+        count, since it neither adds nor removes notes.
+        """
+        runner.invoke(cli, ["example-vault"])
+
+        stems = {p.stem for p in temp_vault.glob("*.md")}
+        stems |= {p.stem for p in (temp_vault / "archive").glob("*.md")}
+
+        assert "eval-suite" in stems
+        assert "evaluation_suite" not in stems
+        # Children must have followed the parent.
+        assert any(s.startswith("eval-suite.") for s in stems)
+
+    def test_auto_created_parent_groups_exist(self, runner, temp_vault):
+        """Tasks like foundation_model.data.x imply a `.data` group note."""
+        runner.invoke(cli, ["example-vault"])
+
+        stems = {p.stem for p in temp_vault.glob("*.md")}
+        assert "foundation_model.data" in stems
+        assert "foundation_model.experiments" in stems
+
+    def test_does_not_spawn_cor_as_a_subprocess(self, runner, temp_vault, monkeypatch):
+        import subprocess
+
+        real_run = subprocess.run
+
+        def guard(cmd, *a, **k):
+            if cmd and cmd[0] == "cor":
+                raise AssertionError(f"spawned a cor subprocess: {cmd!r}")
+            return real_run(cmd, *a, **k)
+
+        monkeypatch.setattr(subprocess, "run", guard)
+        result = runner.invoke(cli, ["example-vault"])
+        assert result.exit_code == 0, result.output

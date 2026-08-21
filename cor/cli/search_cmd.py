@@ -2,6 +2,9 @@
 
 import click
 
+from ..ui.theme import rule
+from ..search.content import note_matches_filters
+
 from . import cli
 from cor.search import search_content, parse_search_query, filter_matches, SearchMatch
 from ..utils import require_init, get_notes_dir
@@ -76,24 +79,6 @@ def _format_match(match: SearchMatch, query: str, show_context: bool = True) -> 
     return "\n".join(lines)
 
 
-def _note_matches_filters(note, filters: dict) -> bool:
-    """Check a note's metadata against parsed search filters."""
-    if "status" in filters and note.status != filters["status"]:
-        return False
-
-    if "tags" in filters:
-        if not set(filters["tags"]).issubset(set(note.tags or [])):
-            return False
-
-    if "project" in filters:
-        project = filters["project"]
-        stem = note.path.stem
-        if not (stem == project or stem.startswith(f"{project}.")):
-            return False
-
-    return True
-
-
 def _list_notes_by_filters(filters: dict, archived: bool, limit: int):
     """List notes matching metadata filters, one line per note.
 
@@ -117,7 +102,7 @@ def _list_notes_by_filters(filters: dict, archived: bool, limit: int):
             note = NoteMetadata.from_file(path)
         except Exception:
             continue
-        if _note_matches_filters(note, filters):
+        if note_matches_filters(note, filters):
             results.append(note)
 
     if not results:
@@ -141,7 +126,7 @@ def _list_notes_by_filters(filters: dict, archived: bool, limit: int):
         line += f" {click.style(note.path.stem, fg='bright_black')}"
         click.echo(line)
 
-    click.echo(click.style("-" * 40, fg="bright_black"))
+    click.echo(rule())
     shown = min(total, limit)
     suffix = f" (of {total})" if total > shown else ""
     click.echo(f"{shown} note" + ("s" if shown != 1 else "") + suffix)
@@ -152,7 +137,7 @@ def _list_notes_by_filters(filters: dict, archived: bool, limit: int):
 @click.option("--limit", "-n", type=int, default=20, help="Maximum number of results")
 @click.option("--no-context", is_flag=True, help="Hide context lines (compact output)")
 @click.argument("query")
-@require_init
+@require_init(write=False)
 def search(archived: bool, limit: int, no_context: bool, query: str):
     """Search content across all notes.
 
@@ -239,5 +224,5 @@ def search(archived: bool, limit: int, no_context: bool, query: str):
 
     # Summary
     total_str = f"{len(matches)} result" + ("s" if len(matches) != 1 else "")
-    click.echo(click.style("-" * 40, fg="bright_black"))
+    click.echo(rule())
     click.echo(f"{total_str}")

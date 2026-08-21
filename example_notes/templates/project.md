@@ -1,11 +1,13 @@
 ---
 type: project
 status: planning
-created: {date}
-modified: {date}
+created:
+  date:
+modified: 2026-07-31 23:54
 priority:
 due:
 ---
+
 # {name}
 
 ## Summary
@@ -27,4 +29,3 @@ due:
 
 
 ## References
-
