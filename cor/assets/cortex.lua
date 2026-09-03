@@ -37,7 +37,11 @@ local function current_stem()
 end
 
 --- Run a `cor` command asynchronously and reload anything it rewrote.
-local function run(args, on_success)
+---
+--- `opts.quiet` skips the stdout notification, for callers that show their own
+--- feedback (or open the file `cor` just created).
+local function run(args, on_success, opts)
+  opts = opts or {}
   vim.system(
     vim.list_extend({ "cor" }, args),
     { cwd = get_vault(), text = true },
@@ -50,7 +54,7 @@ local function run(args, on_success)
       -- `cor` rewrote frontmatter on disk; pull it into open buffers.
       vim.cmd("checktime")
       local out = vim.trim(r.stdout or "")
-      if out ~= "" then vim.notify(out) end
+      if out ~= "" and not opts.quiet then vim.notify(out) end
       if on_success then on_success(r) end
     end)
   )
@@ -311,6 +315,85 @@ local function add_related()
   )
 end
 
+-- Words that make a poor last word in a derived task name. Mirrors
+-- `_NAME_FILLER` in cor/cli/notes.py so the prompt shows what `cor` would pick.
+local NAME_FILLER = {}
+local FILLER_WORDS = "a an and as at by for from in into of on or the to with "
+  .. "al con de del el en la las los para por que un una y"
+for word in FILLER_WORDS:gmatch("%S+") do
+  NAME_FILLER[word] = true
+end
+
+--- Default stem for a block of text: first six meaningful words, slugified.
+local function derive_slug(line)
+  local text = line:gsub("^%s*", "")
+  text = text:gsub("^[-*+]%s+%[.%]%s+", ""):gsub("^[-*+]%s+", ""):gsub("^%d+[.)]%s+", "")
+
+  local words = {}
+  for word in text:gmatch("%S+") do
+    if #words == 6 then break end
+    table.insert(words, word)
+  end
+  while #words > 0 and NAME_FILLER[(words[#words]:lower():gsub("[,.;:]+$", ""))] do
+    table.remove(words)
+  end
+
+  local slug = table.concat(words, "_"):lower()
+  -- Drop what would break a filename or the dotted hierarchy; letters with
+  -- accents are left alone.
+  return (slug:gsub("[%s%.,;:!%?/\\&|<>%(%)%[%]{}\"\'`~%*#%%$@=+%^]", ""))
+end
+
+--- Move the selected lines (or the current line) into a task of their own.
+---
+--- The block, the link left in its place and the parent's Tasks entry are all
+--- written by `cor extract`; this only picks the range, offers a name and opens
+--- the result.
+local function extract_task(is_visual)
+  return function()
+    local first, last = vim.fn.line("."), vim.fn.line(".")
+    if is_visual then
+      first, last = vim.fn.getpos("v")[2], vim.fn.line(".")
+      if first > last then first, last = last, first end
+      vim.cmd("normal! \27")
+    end
+
+    local stem = current_stem()
+    local prefix = stem:match("^(.*)%.[^.]+$") or stem
+    local slug = derive_slug(vim.fn.getline(first))
+
+    vim.ui.input(
+      { prompt = "Extract to task: ", default = prefix .. "." .. slug },
+      function(name)
+        if not name or vim.trim(name) == "" then return end
+        name = vim.trim(name)
+
+        -- `cor` reads the range from disk, so unsaved edits must land first.
+        if vim.bo.modified then
+          local ok, err = pcall(vim.cmd, "silent noautocmd write")
+          if not ok then
+            vim.notify(tostring(err), vim.log.levels.ERROR)
+            return
+          end
+        end
+
+        run(
+          { "extract", stem, "--lines", first .. "-" .. last, "--name", name },
+          function(r)
+            -- `cor extract` prints the new file as its last line.
+            local path
+            for line in vim.gsplit(r.stdout or "", "\n") do
+              if vim.trim(line) ~= "" then path = vim.trim(line) end
+            end
+            vim.cmd("edit " .. vim.fn.fnameescape(path or (get_vault() .. "/" .. name .. ".md")))
+          end,
+          { quiet = true }
+        )
+      end
+    )
+  end
+end
+
 local function show_relations()
   run({ "rel", "show", current_stem() })
 end
@@ -339,6 +422,8 @@ vim.api.nvim_create_autocmd("FileType", {
     map("n", "<leader>cc", add_continues, "continues project")
     map("n", "<leader>cr", add_related, "add related note")
     map("n", "<leader>cR", show_relations, "show relations")
+    map("n", "<leader>cx", extract_task(false), "extract line to task")
+    map("x", "<leader>cx", extract_task(true), "extract selection to task")
   end,
 })
 

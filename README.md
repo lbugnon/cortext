@@ -174,6 +174,7 @@ tags: [coding, urgent]
 | `cor example-vault` | Create a sample vault to explore features |
 | `cor new <type> <name>` | Create file from template (project, task, note) |
 | `cor expand <task>` | Expand task checklist into individual subtasks |
+| `cor extract <note> --lines N[-M]` | Turn a block of lines into a task, leaving a link in its place |
 | `cor edit <name>` | Open existing file in editor (use `-a` to include archived) |
 | `cor delete <name>` (`del`) | Delete a file |
 | `cor mark <name> <status>` | Change task status (also parses `due`/`tag` from trailing text) |
@@ -619,6 +620,62 @@ Implement new authentication feature:
 - Removes the original checklist
 
 The task becomes a proper task group with full hierarchy and linking support.
+
+### Turning a Note Line Into a Task
+
+Notes grow tasks. When one bullet of a note turns out to be work, promote it
+instead of retyping it:
+
+**Before** (`my-project.meeting-notes.md`):
+```markdown
+1. Reviewed the pipeline output
+2. Agreed on the metric
+3. Someone should fix login redirect on Safari
+   - only reproduces on iOS 17
+```
+
+**After running** `cor extract my-project.meeting-notes --lines 16-17`:
+```markdown
+1. Reviewed the pipeline output
+2. Agreed on the metric
+3. [Someone should fix login redirect](my-project.someone_should_fix_login_redirect.md)
+```
+
+The lines move into the new task's `## Description`, the task is created as a
+sibling of the note (`my-project.<slug>`) and indexed in `my-project.md`'s
+`## Tasks`, and the note keeps a link where the bullet was. Options:
+
+- `--name fix_login` names the task (dotted names choose another parent, e.g.
+  `--name my-project.bugs.fix_login`); omitted, the name comes from the text.
+- `--keep` copies instead of moving, leaving the original lines in place.
+
+The last line printed is the path of the new task, which is what makes this
+usable from an editor — see [nvim integration](docs/nvim.md) and `<leader>cx`
+below.
+
+### Useful nvim Commands
+
+Installed by `cor init` into `~/.config/nvim/lua/plugins/cortex.lua`. All
+bindings are buffer-local to markdown files **inside the vault**, so they never
+shadow anything elsewhere. Full details in [docs/nvim.md](docs/nvim.md).
+
+| Key | Mode | Action |
+|-----|------|--------|
+| `gf` | Normal | Follow the link under the cursor (built-in, no plugin needed) |
+| `<C-l>` | Insert | Insert a link to a note (picker shows status, title, tags) |
+| `<C-S-l>` | Insert | Insert a link, archive included |
+| `<leader>bl` | Normal | List files linking to this one (backlinks) |
+| `<leader>cx` | Normal | Extract the current line into a new task and open it |
+| `<leader>cx` | Visual | Extract the selected lines into a new task and open it |
+| `<leader>cm` | Normal | Set status (`cor mark`) |
+| `<leader>ct` | Normal | Add a tag (`cor tag`, completes from tags in the vault) |
+| `<leader>cd` | Normal | Set a due date in natural language (`cor due`) |
+| `<leader>cc` | Normal | Link the project this one continues (`cor rel add`) |
+| `<leader>cr` | Normal | Link a related note (`cor rel add`) |
+| `<leader>cR` | Normal | Show all relations for this note (`cor rel show`) |
+
+Reads (pickers, backlinks) are pure Lua over `fd`/`rg`; every write shells out
+to `cor` so the CLI stays the single source of truth.
 
 ### Completion Configuration
 

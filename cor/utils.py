@@ -504,6 +504,46 @@ def remove_checklist_items(content: str) -> str:
     return '\n'.join(filtered_lines)
 
 
+# Leading list decoration on a markdown line: indent, then an optional bullet
+# (`- `, `* `, `+ `, with or without a `[ ]` checkbox) or an ordered marker
+# (`1. `, `1) `).
+LIST_MARKER = re.compile(r"^(\s*)((?:[-*+]\s+(?:\[[^\]]\]\s+)?|\d+[.)]\s+))?")
+
+
+def split_list_marker(line: str) -> tuple[str, str, str]:
+    """Split a line into (indent, list marker, remaining text).
+
+    The marker keeps its trailing whitespace so ``indent + marker + text``
+    reconstructs the line. Lines that are not list items get an empty marker.
+    """
+    match = LIST_MARKER.match(line)
+    indent, marker = match.group(1), match.group(2) or ""
+    return indent, marker, line[match.end():]
+
+
+def parse_block(lines: list[str]) -> tuple[str, str, str]:
+    """Prepare a block of lines for reuse as a note body.
+
+    Drops the first line's list marker and the indentation the block sits at,
+    keeping indentation *relative* to the first line so nested bullets survive.
+    Returns ``(body, indent, marker)`` so the caller can put a replacement line
+    back where the block was.
+    """
+    indent, marker, first = split_list_marker(lines[0])
+    # Lines continuing a list item sit under its marker, so that width comes off
+    # too: "3. text" + "   - detail" becomes "text" + "- detail".
+    continuation = indent + " " * len(marker)
+    rest = []
+    for line in lines[1:]:
+        for prefix in (continuation, indent):
+            if prefix and line.startswith(prefix):
+                line = line[len(prefix):]
+                break
+        rest.append(line)
+    body = "\n".join([first] + rest).strip()
+    return body, indent, marker
+
+
 # --- Verbosity utilities ---
 
 def log_info(message: str, min_level: int = 1) -> None:

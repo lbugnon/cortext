@@ -28,6 +28,8 @@ from ..utils import (
     parse_natural_language_text,
     read_h1,
     title_to_stem,
+    get_parent_name,
+    parse_block,
 )
 from ..completions import (
     complete_name,
@@ -1058,6 +1060,172 @@ def expand(name: str):
     log_info(click.style(f"\nSuccess! Created {len(created_files)} subtasks under {task_stem}", fg="green"))
     for safe_name, filename, status in created_files:
         log_info(f"  - {filename} (status: {status})")
+
+
+# Words that make a poor last word in a derived task name. Spanish connectors
+# are in there too: notes are often bilingual.
+_NAME_FILLER = set(
+    "a an and as at by for from in into of on or the to with "
+    "al con de del el en la las los para por que un una y".split()
+)
+
+
+def _parse_line_range(spec: str) -> tuple[int, int]:
+    """Parse a 1-based inclusive ``N`` or ``N-M`` line range."""
+    match = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", spec)
+    if not match:
+        raise ValidationError(f"Invalid --lines value '{spec}'. Use 'N' or 'N-M'.")
+
+    start = int(match.group(1))
+    end = int(match.group(2) or start)
+    if start < 1 or end < start:
+        raise ValidationError(f"Invalid line range '{spec}'.")
+    return start, end
+
+
+def _find_block(lines: list[str], block: list[str], hint: int) -> int:
+    """Index of ``block`` inside ``lines``, closest to ``hint``; -1 if absent.
+
+    Creating the task can append a Tasks entry to the source note (when the note
+    is the new task's parent), so line numbers taken before the creation cannot
+    be trusted afterwards - the block is located by content instead.
+    """
+    size = len(block)
+    matches = [i for i in range(len(lines) - size + 1) if lines[i:i + size] == block]
+    if not matches:
+        return -1
+    return min(matches, key=lambda i: abs(i - hint))
+
+
+def _body_start(lines: list[str]) -> int:
+    """First line number (1-based) that is past the frontmatter block."""
+    if not lines or lines[0].strip() != "---":
+        return 1
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return i + 2
+    return 1
+
+
+@cli.command()
+@click.option("--lines", "line_range", required=True, metavar="N[-M]",
+              help="Line range to extract (1-based, inclusive).")
+@click.option("--name", "name", default=None,
+              help="Stem for the new task. Dotted names set the parent; "
+                   "a bare name becomes a sibling of SOURCE. Derived from the "
+                   "text when omitted.")
+@click.option("--keep", is_flag=True,
+              help="Copy the lines instead of moving them.")
+@click.argument("source", shell_complete=complete_existing_name)
+@require_init
+def extract(line_range: str, name: str | None, keep: bool, source: str):
+    """Turn a block of lines in a note into a task of its own.
+
+    The lines move into the new task's Description and are replaced in place by
+    a link to it, so the note keeps its structure. Designed to be driven by an
+    editor (see the nvim keymap `<leader>cx`), which is why the block is given
+    as a line range; the last line printed is the path of the new task.
+
+    \b
+    Examples:
+      cor extract myproject.meeting-notes --lines 14
+      cor extract myproject.meeting-notes --lines 14-17
+      cor extract myproject.notes --lines 14 --name fix_login
+      cor extract myproject.notes --lines 14 --name myproject.bugs.fix_login
+      cor extract myproject.notes --lines 14 --keep     # leave the text behind
+    """
+    notes_dir = get_notes_dir()
+
+    focused = get_focused_project()
+    result = resolve_file_fuzzy(source, include_archived=False, focused_project=focused)
+    if result is None:
+        return  # User cancelled
+
+    source_stem, is_archived = result
+    source_path = get_file_path(source_stem, is_archived)
+
+    start, end = _parse_line_range(line_range)
+    lines = source_path.read_text().split("\n")
+
+    if end > len(lines):
+        raise ValidationError(
+            f"{source_stem}.md has {len(lines)} lines; asked for {start}-{end}."
+        )
+    if start < _body_start(lines):
+        raise ValidationError(
+            "That range covers the frontmatter. Select lines from the note body."
+        )
+
+    # Shrink the range to its non-blank span, so a selection that overshoots by
+    # a blank line does not swallow the paragraph break around it.
+    while start <= end and not lines[start - 1].strip():
+        start += 1
+    while end >= start and not lines[end - 1].strip():
+        end -= 1
+    if start > end:
+        raise ValidationError("The selected lines are empty.")
+
+    block = lines[start - 1:end]
+    body, indent, marker = parse_block(block)
+
+    if not name:
+        # Same 6-word convention as `cor expand`, minus a trailing filler word
+        # ("...redirect on" reads badly as both a stem and a title).
+        words = body.split("\n")[0].split()[:6]
+        while words and words[-1].lower().strip(",.;:") in _NAME_FILLER:
+            words.pop()
+        name = title_to_stem(" ".join(words))
+        if not name:
+            raise ValidationError(
+                "Could not derive a task name from those lines; pass --name."
+            )
+
+    full_stem = name if "." in name else f"{get_parent_name(source_stem) or source_stem}.{name}"
+    target_path = notes_dir / f"{full_stem}.md"
+    if target_path.exists():
+        raise AlreadyExistsError(f"File already exists: {target_path}")
+
+    # Create through `cor new` so parents are auto-created and the task is
+    # indexed in its parent's Tasks section exactly as usual. The stem is always
+    # fully qualified here, so focus cannot rewrite it and the path is known.
+    ctx = click.get_current_context()
+    ctx.invoke(new, note_type="task", name=full_stem, text=(), no_edit=True,
+               continues=())
+
+    content = target_path.read_text()
+    if "## Description\n" in content:
+        content = content.replace("## Description\n", f"## Description\n\n{body}\n", 1)
+    else:
+        content = content.rstrip("\n") + f"\n\n{body}\n"
+    target_path.write_text(content)
+
+    # Keep the original bullet, but never a checkbox one: MaintenanceRunner
+    # treats `- [ ] [Title](stem.md)` as a task entry and sort_tasks_in_parent
+    # rewrites the whole span between the first and last such line in a parent
+    # file, which would drag surrounding prose along. A plain bullet is inert.
+    link_marker = re.sub(r"\[[^\]]\]\s+", "", marker)
+    link_line = f"{indent}{link_marker}[{format_title(full_stem.split('.')[-1])}]({full_stem}.md)"
+
+    lines = source_path.read_text().split("\n")
+    at = _find_block(lines, block, start - 1)
+    if at < 0:
+        raise ValidationError(
+            f"Created {full_stem}, but those lines are no longer in "
+            f"{source_stem}.md; the note was left as it is."
+        )
+
+    if keep:
+        lines[at + len(block):at + len(block)] = [link_line]
+    else:
+        lines[at:at + len(block)] = [link_line]
+    source_path.write_text("\n".join(lines))
+
+    MaintenanceRunner(notes_dir).sync([str(source_path), str(target_path)])
+
+    verb = "Copied" if keep else "Moved"
+    log_info(f"{verb} {source_stem}.md lines {start}-{end} into {full_stem}")
+    # Last line is the new file, for editors and scripts.
+    click.echo(str(target_path))
 
 
 @cli.command()

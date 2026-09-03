@@ -58,11 +58,13 @@ Buffer-local, markdown files **inside the vault** only.
 | `<leader>cc` | Normal | Link a project this one continues | `cor rel add --as continues` |
 | `<leader>cr` | Normal | Link a related note | `cor rel add --as related` |
 | `<leader>cR` | Normal | Show all relations for this note | `cor rel show` |
+| `<leader>cx` | Normal | Extract the current line into a task | `cor extract` |
+| `<leader>cx` | Visual | Extract the selected lines into a task | `cor extract` |
 
 `<leader>cm` offers the task or project status set depending on the buffer's
 `type:`. `<leader>ct` completes from tags already used in the vault.
 `<leader>cd` accepts anything `cor due` accepts — `friday`, `in 2 weeks`,
-`tomorrow 8pm`.
+`tomorrow 8pm`. `<leader>cx` is described below.
 
 Bindings are buffer-local and only apply to markdown files **inside the vault**,
 so LazyVim's own mappings are untouched everywhere else. Inside the vault,
@@ -88,6 +90,36 @@ first ~40 lines of each file, so it stays fast across a large vault.
 
 `templates/` is always excluded — template files carry `type: project` and would
 otherwise appear as a real project.
+
+### Extracting a task from a note
+
+A note often grows a line that is really a task. `<leader>cx` promotes it:
+select the lines in visual mode (or just sit on the line in normal mode), press
+the key, and a prompt appears prefilled with the stem `cor` would use:
+
+```
+Extract to task: myproject.someone_should_fix_login_redirect
+```
+
+The prompt is editable, so it doubles as the way to retarget the parent — type
+`myproject.bugs.fix_login` and the task lands under the `bugs` group (created if
+missing). Confirming runs `cor extract`, which
+
+- moves the lines into the new task's `## Description`,
+- replaces them in the note with `[Task Title](stem.md)`, keeping the original
+  indentation and bullet,
+- adds the usual `- [ ] [Task Title](stem.md)` entry to the parent's `## Tasks`,
+- and opens the new task in the current window (`<C-o>` goes back).
+
+Whole lines only: a partial (character-wise) selection is rounded out to the
+lines it touches. The buffer is written before `cor` runs, because the CLI reads
+the range from disk.
+
+The inline link is left as a plain bullet on purpose. `- [ ] [Title](stem.md)`
+is a *task entry* to `MaintenanceRunner`, which sorts those lines within their
+parent file; an entry sitting in the middle of prose would be moved out of it.
+The checkbox that tracks status lives in the parent's `## Tasks` section, where
+sync expects it.
 
 ### Link format
 
