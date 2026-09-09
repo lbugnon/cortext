@@ -12,6 +12,8 @@ from pathlib import Path
 
 import frontmatter
 
+from .files import save_note
+
 from .archive import ArchiveManager
 
 #: Heading inserted into the successor to hold predecessor context.
@@ -179,8 +181,7 @@ def apply_continuation_context(
         return []
 
     post.content = _insert_blocks(post.content, blocks)
-    with open(successor_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(successor_path, post)
 
     return added
 

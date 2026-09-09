@@ -16,6 +16,7 @@ import frontmatter
 from ..dependencies import RELATION_FIELDS, detect_circular_dependencies
 from ..exceptions import NotFoundError, ValidationError
 from .archive import ArchiveManager
+from .files import save_note
 from .notes import NoteMetadata, _as_list
 
 
@@ -24,8 +25,7 @@ def _load(path: Path) -> frontmatter.Post:
 
 
 def _save(path: Path, post: frontmatter.Post) -> None:
-    with open(path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(path, post)
 
 
 def _all_notes(notes_dir: Path) -> list[NoteMetadata]:

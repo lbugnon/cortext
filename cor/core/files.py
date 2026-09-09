@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Iterator
 import frontmatter
 
+from .storage import atomic_write_post
+
 
 def load_note(filepath: str | Path) -> frontmatter.Post | None:
     """Load a note file and return its frontmatter Post, or None on failure.
@@ -27,9 +29,7 @@ def load_note(filepath: str | Path) -> frontmatter.Post | None:
 
 def save_note(filepath: str | Path, post: frontmatter.Post) -> None:
     """Write a frontmatter Post back to disk, preserving key order."""
-    path = Path(filepath)
-    with open(path, 'wb') as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    atomic_write_post(filepath, post)
 
 def _is_top_level_note(path: Path) -> bool:
     """Return True if ``path`` is a note file (``type: note``) at the top level.

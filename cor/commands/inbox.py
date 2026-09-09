@@ -9,6 +9,8 @@ from pathlib import Path
 import click
 import frontmatter
 
+from ..core.files import save_note
+
 from ..exceptions import NotFoundError, ExternalServiceError
 from ..schema import DATE_TIME
 from ..config import get_remote_inbox
@@ -244,8 +246,7 @@ def pull_remote_inbox(
     post["modified"] = datetime.now().strftime(DATE_TIME)
     post.content = new_content
 
-    with open(backlog_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(backlog_path, post)
 
     # 4. Clear messages from Telegram
     if delete_after_sync and delete_ids:

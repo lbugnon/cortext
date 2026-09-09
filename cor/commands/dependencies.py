@@ -5,6 +5,8 @@ from datetime import datetime
 import click
 import frontmatter
 
+from ..core.files import save_note
+
 from ..exceptions import ValidationError
 from ..completions import complete_task_name
 from ..dependencies import get_dependency_info, validate_dependencies
@@ -92,8 +94,7 @@ def depend_add(dependent_item: str, required_item: str):
         return
 
     # Save
-    with open(dependent_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(dependent_path, post)
 
     log_info(
         f"Added requirement: {click.style(dependent_stem, fg='cyan')} "
@@ -144,8 +145,7 @@ def depend_remove(dependent_item: str, required_item: str):
     post["modified"] = datetime.now().strftime(DATE_TIME)
 
     # Save
-    with open(dependent_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(dependent_path, post)
 
     log_info(
         f"Removed requirement: {click.style(dependent_stem, fg='cyan')} "

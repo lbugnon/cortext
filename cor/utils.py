@@ -25,6 +25,7 @@ from .config import (
 )
 from .exceptions import ConfigError, NotInitializedError, NotFoundError
 from .schema import DATE_TIME
+from .core.storage import atomic_write_text
 
 
 def _in_shell_completion() -> bool:
@@ -256,11 +257,11 @@ def format_due_date(due_date) -> str:
 
 
 def format_title(name: str) -> str:
-    """Format name as title: underscores become spaces, capitalize first letter.
+    """Format name as title: separators become spaces, capitalize first letter.
 
-    Examples: "my_cool_task" -> "My cool task", "fix-bug" -> "Fix-bug"
+    Examples: "my_cool_task" -> "My cool task", "fix-bug" -> "Fix bug"
     """
-    title = name.replace("_", " ")
+    title = re.sub(r"[-_]+", " ", name)
     return title[0].upper() + title[1:] if title else title
 
 
@@ -409,11 +410,11 @@ def add_task_to_project(project_path: Path, task_name: str, task_filename: str):
             # Tasks section exists but empty, append at end
             new_lines.append(task_entry)
 
-        project_path.write_text("\n".join(new_lines)+"\n")
+        atomic_write_text(project_path, "\n".join(new_lines) + "\n")
     else:
         # No Tasks section, add one
         content += f"\n## Tasks\n{task_entry}\n"
-        project_path.write_text(content)
+        atomic_write_text(project_path, content)
 
 
 def parse_checklist_items(content: str) -> list[tuple[str, str, str]]:
