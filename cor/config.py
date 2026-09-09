@@ -81,16 +81,15 @@ def resolve_vault() -> tuple[Path, str]:
     """Resolve the active vault, reporting which rule produced it.
 
     Precedence:
-    1. Nearest ancestor of cwd containing backlog.md (vault marker).
-    2. COR_VAULT environment variable.
+    1. COR_VAULT environment variable.
+    2. Nearest ancestor of cwd containing backlog.md (vault marker).
     3. The default vault in ~/.config/cor/config.yaml.
 
-    Enables multiple vaults on one machine: cd into a vault and `cor`
-    operates on it. The config file remains the fallback when neither cwd
-    nor env points at a vault - but that fallback is a *guess*, which is
-    why the source is returned alongside the path. Callers that are about
-    to write should refuse to act on VAULT_SOURCE_CONFIG without
-    confirming; see cor.utils.require_init.
+    COR_VAULT is an explicit selection and therefore overrides location-based
+    discovery. Without it, cd into a vault and `cor` operates on that vault.
+    The config file remains the fallback when neither env nor cwd identifies a
+    vault, but that fallback is a *guess*. The source lets write commands refuse
+    that guess; see cor.utils.require_init.
 
     Returns:
         (vault path, one of VAULT_SOURCE_*).
@@ -98,13 +97,13 @@ def resolve_vault() -> tuple[Path, str]:
     Raises:
         ConfigError: if none of the three rules resolves.
     """
-    discovered = _find_vault_from_cwd()
-    if discovered is not None:
-        return discovered, VAULT_SOURCE_CWD
-
     env_vault = os.environ.get("COR_VAULT")
     if env_vault:
         return Path(env_vault), VAULT_SOURCE_ENV
+
+    discovered = _find_vault_from_cwd()
+    if discovered is not None:
+        return discovered, VAULT_SOURCE_CWD
 
     default = get_default_vault_path()
     if default is None:

@@ -67,7 +67,7 @@ def test_find_vault_from_cwd_returns_none_when_no_backlog_md(tmp_path, monkeypat
     assert _find_vault_from_cwd() is None
 
 
-def test_get_vault_path_prefers_cwd_over_env_and_config(tmp_path, monkeypatch):
+def test_get_vault_path_prefers_explicit_env_over_cwd_and_config(tmp_path, monkeypatch):
     cwd_vault = _make_vault(tmp_path, "cwd_vault")
     env_vault = _make_vault(tmp_path, "env_vault")
     cfg_vault = tmp_path / "cfg_vault"
@@ -76,7 +76,7 @@ def test_get_vault_path_prefers_cwd_over_env_and_config(tmp_path, monkeypatch):
     monkeypatch.setenv("COR_VAULT", str(env_vault))
     monkeypatch.chdir(cwd_vault)
 
-    assert get_vault_path() == cwd_vault
+    assert get_vault_path() == env_vault
 
 
 def test_get_vault_path_falls_back_to_env_when_cwd_misses(tmp_path, monkeypatch):
