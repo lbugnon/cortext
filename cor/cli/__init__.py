@@ -272,6 +272,15 @@ from ..commands.calendar import auth as calendar_auth
 from ..commands.calendar import sync as calendar_sync
 from ..commands.calendar import status as calendar_status
 from ..commands.calendar import logout as calendar_logout
+from ..commands.agent import (
+    batch_cmd,
+    get_cmd,
+    history_cmd,
+    recover_cmd,
+    undo_cmd,
+    update_cmd,
+    validate_cmd,
+)
 from .search_cmd import search
 
 cli.add_command(init)
@@ -303,6 +312,13 @@ cli.add_command(weekly)
 cli.add_command(tree)
 cli.add_command(status)
 cli.add_command(search)
+cli.add_command(get_cmd)
+cli.add_command(update_cmd)
+cli.add_command(batch_cmd)
+cli.add_command(validate_cmd)
+cli.add_command(history_cmd)
+cli.add_command(recover_cmd)
+cli.add_command(undo_cmd)
 cli.add_command(shell_cmd)
 
 # Calendar commands group

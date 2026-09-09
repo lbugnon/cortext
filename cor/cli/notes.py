@@ -1,7 +1,6 @@
 """Note and task management commands for Cortex CLI."""
 
 import re
-import shutil
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +13,10 @@ from ..exceptions import ValidationError, NotFoundError, AlreadyExistsError
 from ..schema import VALID_TASK_STATUS, VALID_PROJECT_STATUS, STATUS_SYMBOLS, DATE_TIME
 from ..config import get_focused_project
 from ..core.notes import parse_metadata
+from ..core.files import save_note
+from ..core.operations import create_entry, relate_entries, resolve_exact, transition_entry
+from ..core.storage import atomic_write_text
+from ..core.transactions import transactional_command
 from ..sync import MaintenanceRunner
 from ..utils import (
     get_notes_dir,
@@ -41,80 +44,6 @@ from ..completions import (
 from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy, resolve_files
 
 
-def _template_for_level(child_type: str, level_index: int) -> str:
-    """Return the template type for an auto-created parent at the given level.
-
-    Tasks live under projects, so a missing top-level (level_index == 0) parent
-    for a task becomes a project; deeper levels become task groups. Notes nest
-    freely under notes at every level.
-    """
-    if child_type == "note":
-        return "note"
-    return "project" if level_index == 0 else "task"
-
-
-def _ensure_parents_exist(notes_dir: Path, parent_parts: list[str], child_type: str) -> None:
-    """Create any missing parent files in a hierarchy.
-
-    For ``project.group.leaf`` with child_type ``task``, ensures ``project.md``
-    (as project) and ``project.group.md`` (as task group) exist. Unarchives
-    parents that are present only in archive/. For task children, also links
-    each newly created intermediate level into its own parent's Tasks section.
-    """
-    archive_dir = notes_dir / "archive"
-
-    for i, level_name in enumerate(parent_parts):
-        level_stem = ".".join(parent_parts[: i + 1])
-        level_path = notes_dir / f"{level_stem}.md"
-        archived_path = archive_dir / f"{level_stem}.md"
-
-        if archived_path.exists() and not level_path.exists():
-            shutil.move(str(archived_path), level_path)
-            post = frontmatter.load(level_path)
-            old_status = post.get("status")
-            if old_status in ("done", "dropped"):
-                post["status"] = "todo"
-                with open(level_path, "wb") as f:
-                    frontmatter.dump(post, f, sort_keys=False)
-                click.echo(f"Unarchived {level_stem} ({old_status} → todo)")
-            else:
-                click.echo(f"Unarchived {level_stem}")
-
-            if i > 0:
-                grandparent_stem = ".".join(parent_parts[:i])
-                grandparent_path = notes_dir / f"{grandparent_stem}.md"
-                if grandparent_path.exists():
-                    content = grandparent_path.read_text()
-                    pattern = rf'(\[[^\]]+\]\()archive/{re.escape(level_stem)}\.md(\))'
-                    new_content = re.sub(pattern, rf'\g<1>{level_stem}.md\g<2>', content)
-                    if new_content != content:
-                        grandparent_path.write_text(new_content)
-
-        if level_path.exists():
-            continue
-
-        level_type = _template_for_level(child_type, i)
-        level_template = get_template(level_type)
-        if i > 0:
-            level_parent = ".".join(parent_parts[:i])
-            level_parent_title = format_title(parent_parts[i - 1])
-        else:
-            level_parent = None
-            level_parent_title = None
-
-        level_content = render_template(
-            level_template, level_name, level_parent, level_parent_title
-        )
-        level_path.write_text(level_content)
-        click.echo(f"Created {level_path}")
-
-        # Tasks index themselves in their parent's Tasks section; notes don't.
-        if i > 0 and child_type == "task":
-            parent_path = notes_dir / f"{level_parent}.md"
-            add_task_to_project(parent_path, level_name, level_stem)
-            click.echo(f"Added to {parent_path}")
-
-
 @cli.command()
 @click.argument("note_type", type=click.Choice(["project", "task", "note"]))
 @click.argument("name", shell_complete=complete_name)
@@ -126,6 +55,7 @@ def _ensure_parents_exist(notes_dir: Path, parent_parts: list[str], child_type: 
     help="Project(s) this one continues. Repeatable. Projects only.",
 )
 @require_init
+@transactional_command
 def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool,
         continues: tuple[str, ...]):
     """Create a new project, task, or note.
@@ -163,166 +93,43 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool,
             f"--continues is only valid for projects, not {note_type}s."
         )
 
-    # Validate: dots are only for hierarchy, not within names
-    parts = name.split(".")
-    for part in parts:
-        if not part:
-            raise ValidationError(
-                "Invalid name: empty segment. Use 'project.task' format."
-            )
-        if "&" in part:
-            raise ValidationError(
-                "Invalid name: '&' is not allowed in note names."
-            )
-    if note_type=="project" and "." in name:
-        raise ValidationError(
-            f"Invalid project name '{name}': dots are reserved for hierarchy. "
-            "Use hyphens instead (e.g., 'v0-1' not 'v0.1')."
-        )
-
-    # Parse dot notation for task/note: "project.taskname" or "project.group.taskname" or "project.group.smaller_group.task"
-    task_name = name
-    parent_hierarchy, project = None, None
-    
     # Apply focus if set and no project specified
     if note_type in ("task", "note") and "." not in name:
         focused = get_focused_project()
         if focused:
-            # Prepend focused project to the name
             name = f"{focused}.{name}"
-            parts = name.split(".")
-    
-    if note_type in ("task", "note") and "." in name:
-        # Reuse parts from validation above
-        if len(parts) == 2:
-            # project.task
-            project = parts[0]
-            task_name = parts[1]
-        elif len(parts) >= 3:
-            # project.group.task or project.group.smaller_group.task (or deeper)
-            project = parts[0]
-            parent_hierarchy = ".".join(parts[:-1])  # Everything except the last part
-            task_name = parts[-1]
-        else:
-            raise ValidationError(
-                "Invalid name: use 'project.task', 'project.group.task', or deeper hierarchy format."
+    text_value = " ".join(text).strip()
+    text_was_provided = bool(text_value)
+    metadata = {}
+    section_values = {}
+    if text_value:
+        cleaned, due, tags, parsed_status, priority = parse_natural_language_text(
+            text_value
+        )
+        if cleaned:
+            heading = {"project": "Goal", "task": "Description"}.get(
+                note_type, "Summary"
             )
-
-    # Build filename
-    if note_type == "project":
-        filename = f"{name}.md"
-    else:
-        if parent_hierarchy:
-            # Use full parent hierarchy: project.group.smaller_group.task
-            filename = f"{parent_hierarchy}.{task_name}.md"
-        elif project:
-            filename = f"{project}.{task_name}.md"
-        else:
-            filename = f"{task_name}.md"
-
-    filepath = notes_dir / filename
-
-    if filepath.exists():
-        raise AlreadyExistsError(f"File already exists: {filepath}")
-    # Note: We don't check archive by default (consistent with edit/mark/move)
-    # Archived files don't block creating new files with the same name
-
-    # Read and render template
-    template = get_template(note_type)
-
-    # Determine parent for task/note files
-    parent = None
-    parent_title = None
-    if note_type in ("task", "note"):
-        if parent_hierarchy:
-            # Task/note under a parent hierarchy (group or deeper)
-            parent = parent_hierarchy
-            # Extract the last component for the title (immediate parent)
-            parent_title = format_title(parent_hierarchy.split(".")[-1])
-        elif project:
-            # Task/note under project: parent is the project
-            parent = project
-            parent_title = format_title(project)
-
-    content = render_template(template, task_name, parent, parent_title)
-
-    filepath.write_text(content)
-    log_info(f"Created {note_type} at {filepath}")
-
-    # Auto-create any missing parents so the parent_link in the child resolves.
-    # Tasks get a project at the top and task groups in between; notes get notes
-    # at every level (a top-level note like `theme.md` is valid knowledge).
-    if note_type in ("task", "note"):
-        if parent_hierarchy:
-            parent_parts = parent_hierarchy.split(".")
-        elif project:
-            parent_parts = [project]
-        else:
-            parent_parts = []
-
-        _ensure_parents_exist(notes_dir, parent_parts, note_type)
-
-        # For tasks, link the new task into the immediate parent's Tasks list.
-        # Notes don't maintain a child-index in markdown; the child's `parent:`
-        # field and `[< Parent]` link are enough.
-        if note_type == "task" and parent_parts:
-            immediate_parent_stem = ".".join(parent_parts)
-            immediate_parent_path = notes_dir / f"{immediate_parent_stem}.md"
-            add_task_to_project(immediate_parent_path, task_name, filepath.stem)
-            click.echo(f"Added to {immediate_parent_path}")
-    
-    if text:
-        text = " ".join(text)
-    
-    text_was_provided = False
-    if text and note_type in ("task", "note", "project"):
-        text_was_provided = True
-        # Parse natural language dates, tags, status, and priority
-        cleaned_text, due_date, parsed_tags, parsed_status, parsed_priority = parse_natural_language_text(text)
-        
-        # Update the description with cleaned text (only if there's actual text left)
-        if cleaned_text:
-            click.echo("Added description text.")
-            with filepath.open("r+") as f:
-                content = f.read()
-                content = content.replace("## Description\n", f"## Description\n\n{cleaned_text}\n")
-                f.seek(0)
-                f.write(content)
-                f.truncate()
-        
-        # Add due date if parsed
-        if due_date:
-            post = frontmatter.load(filepath)
-            post['due'] = due_date.strftime(DATE_TIME)
-            with open(filepath, 'wb') as f:
-                frontmatter.dump(post, f, sort_keys=False)
-            click.echo(f"Set due date: {due_date.strftime(DATE_TIME)}")
-        
-        # Add tags if parsed
-        if parsed_tags:
-            post = frontmatter.load(filepath)
-            existing_tags = post.get("tags", [])
-            new_tags = existing_tags + [t for t in parsed_tags if t not in existing_tags]
-            post["tags"] = new_tags
-            with open(filepath, 'wb') as f:
-                frontmatter.dump(post, f, sort_keys=False)
-            click.echo(f"Added tags: {', '.join(parsed_tags)}")
-        
-        # Set status if parsed (only for tasks)
+            section_values[heading] = cleaned
+        if due:
+            metadata["due"] = due.strftime(DATE_TIME)
+        if tags:
+            metadata["tags"] = tags
         if parsed_status and note_type == "task":
-            post = frontmatter.load(filepath)
-            post['status'] = parsed_status
-            with open(filepath, 'wb') as f:
-                frontmatter.dump(post, f, sort_keys=False)
-            click.echo(f"Set status: {parsed_status}")
-        
-        # Set priority if parsed (tasks and projects)
-        if parsed_priority and note_type in ("task", "project"):
-            post = frontmatter.load(filepath)
-            post['priority'] = parsed_priority
-            with open(filepath, 'wb') as f:
-                frontmatter.dump(post, f, sort_keys=False)
-            click.echo(f"Set priority: {parsed_priority}")
+            metadata["status"] = parsed_status
+        if priority and note_type in {"task", "project"}:
+            metadata["priority"] = priority
+
+    create_entry(
+        notes_dir,
+        note_type,
+        name,
+        metadata=metadata,
+        section_values=section_values,
+        create_parents=True,
+    )
+    filepath, _ = resolve_exact(notes_dir, name)
+    log_info(f"Created {note_type} at {filepath}")
 
     # Link predecessors and pull their Goal across. Done last so the
     # copied context sits in a file that is otherwise fully written.
@@ -340,10 +147,7 @@ def _link_predecessors(notes_dir: Path, filepath: Path, continues: tuple[str, ..
     Shares the `cor rel add --as continues` implementation so both entry points
     write identical state.
     """
-    from ..core.continuation import apply_continuation_context
-    from ..core.relations import add_relation
     from ..search import resolve_file_fuzzy
-    from ..sync.runner import MaintenanceRunner
 
     focused = get_focused_project()
     predecessors = []
@@ -354,15 +158,11 @@ def _link_predecessors(notes_dir: Path, filepath: Path, continues: tuple[str, ..
             return
         predecessors.append(result[0])
 
-    added = add_relation(notes_dir, filepath.stem, predecessors, "continues")
+    added = relate_entries(
+        notes_dir, filepath.stem, "continues", predecessors
+    )["targets"]
     if not added:
         return
-
-    copied = apply_continuation_context(notes_dir, filepath, added)
-    if copied:
-        click.echo(f"Copied context from {', '.join(copied)}")
-
-    MaintenanceRunner(notes_dir).sync([str(filepath)])
     for stem in added:
         click.echo(f"Continues: {stem}")
 
@@ -468,8 +268,7 @@ def _apply_tags(stem: str, is_archived: bool, tags: tuple[str, ...], delete_tags
 
     post["tags"] = new_tags
     post["modified"] = datetime.now().strftime(DATE_TIME)
-    with open(file_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(file_path, post)
 
     # Rewrite tag list in flow style: tags: [a, b]
     # Avoid matching YAML frontmatter delimiters (---) by requiring a space after '-'
@@ -483,7 +282,7 @@ def _apply_tags(stem: str, is_archived: bool, tags: tuple[str, ...], delete_tags
 
     new_text = pattern.sub(_inline_tags, text)
     if new_text != text:
-        Path(file_path).write_text(new_text)
+        atomic_write_text(file_path, new_text)
 
     log_info(summary)
 
@@ -545,8 +344,7 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
                 continue
             old_due = post.metadata.pop("due")
             post["modified"] = datetime.now().strftime(DATE_TIME)
-            with open(file_path, "wb") as f:
-                frontmatter.dump(post, f, sort_keys=False)
+            save_note(file_path, post)
             files_to_sync.append(str(file_path))
             log_info(f"Cleared due date on {stem} (was {old_due}).")
             continue
@@ -554,8 +352,7 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
         old_due = post.metadata.get("due")
         post["due"] = due_date.strftime(DATE_TIME)
         post["modified"] = datetime.now().strftime(DATE_TIME)
-        with open(file_path, "wb") as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(file_path, post)
         files_to_sync.append(str(file_path))
 
         new_due = due_date.strftime(DATE_TIME)
@@ -614,6 +411,7 @@ def delete(archived: bool, name: str):
 @click.argument("status", shell_complete=complete_task_status, required=False)
 @click.argument("text", nargs=-1, type=str)
 @require_init
+@transactional_command
 def mark(archived: bool, status_option: str | None, name: str, status: str | None, text: tuple[str, ...]):
     """Update task or project status.
 
@@ -748,7 +546,6 @@ def _update_project_status(file_path: Path, note, status: str, text: tuple[str, 
             f"Valid: {', '.join(sorted(VALID_PROJECT_STATUS))}"
         )
 
-    dropped_task_paths: list[str] = []
     if status == "done":
         runner = MaintenanceRunner(notes_dir)
         incomplete = runner.get_incomplete_tasks(note.path.stem)
@@ -758,49 +555,26 @@ def _update_project_status(file_path: Path, note, status: str, text: tuple[str, 
                 click.echo(f"  - {t}")
             if not click.confirm("Drop all unfinished tasks?", default=False):
                 raise click.Abort()
-            # Drop all incomplete tasks
-            for task_filename in incomplete:
-                task_path = notes_dir / task_filename
-                if not task_path.exists():
-                    task_path = notes_dir / "archive" / task_filename
-                if task_path.exists():
-                    post = frontmatter.load(task_path)
-                    post["status"] = "dropped"
-                    with open(task_path, "wb") as f:
-                        frontmatter.dump(post, f, sort_keys=False)
-                    dropped_task_paths.append(str(task_path))
+            for task_filename in sorted(
+                incomplete, key=lambda item: item.count("."), reverse=True
+            ):
+                transition_entry(notes_dir, Path(task_filename).stem, "dropped")
 
-    post = frontmatter.load(file_path)
-    if "status" not in post.metadata:
-        raise ValidationError("Could not find status field in frontmatter")
-    old_status = post.get("status", "none")
-    post["status"] = status
+    old_status = note.status or "none"
+    metadata = {}
 
     # Trailing text may carry a due date / priority / tags (status is governed
     # by the command-line argument for projects, so it is not parsed here).
     if text:
         _, due_date, parsed_tags, _, parsed_priority = parse_natural_language_text(" ".join(text))
         if due_date:
-            post["due"] = due_date.strftime(DATE_TIME)
+            metadata["due"] = due_date.strftime(DATE_TIME)
         if parsed_priority:
-            post["priority"] = parsed_priority
+            metadata["priority"] = parsed_priority
         if parsed_tags:
-            existing_tags = post.get("tags", []) or []
-            if isinstance(existing_tags, str):
-                existing_tags = [existing_tags]
-            for tag in parsed_tags:
-                if tag not in existing_tags:
-                    existing_tags.append(tag)
-            post["tags"] = existing_tags
+            metadata["tags"] = parsed_tags
 
-    with open(file_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
-
-    runner = MaintenanceRunner(notes_dir)
-    # Pass dropped tasks first so they archive before the project file does;
-    # otherwise the project moves to archive/ while children stay in notes/
-    # with broken backlinks.
-    runner.sync(dropped_task_paths + [str(file_path)])
+    transition_entry(notes_dir, note.path.stem, status, metadata=metadata)
 
     color = {"done": "green", "active": "cyan", "paused": "yellow", "planning": "blue"}.get(status, "white")
     click.echo(
@@ -827,25 +601,7 @@ def _update_task_status(
         notes_dir: Path to notes directory
         display: Whether to display status update
     """
-    # Validate: task groups cannot be marked done/dropped if children are incomplete
-    if status in ("done", "dropped"):
-        runner = MaintenanceRunner(notes_dir)
-        task_name = note.path.stem
-        incomplete = runner.get_incomplete_tasks(task_name)
-        
-        if incomplete:
-            raise ValidationError(
-                f"Cannot mark as {status} - has incomplete subtasks: {', '.join(incomplete)}"
-            )
-
-    # Load and update frontmatter
-    post = frontmatter.load(file_path)
-
-    if 'status' not in post.metadata:
-        raise ValidationError("Could not find status field in frontmatter")
-
-    old_status = post.get('status', 'none')
-    post['status'] = status
+    old_status = note.status or "none"
 
     # Parse text for due dates, tags, status, and priority
     due_date = None
@@ -868,7 +624,6 @@ def _update_task_status(
         # If a status was parsed from text, it overrides the command-line status
         if parsed_status:
             status = parsed_status
-            post['status'] = status
         
         # Store parsed priority for later use
         priority = parsed_priority
@@ -877,37 +632,28 @@ def _update_task_status(
     if status == "waiting" and due_date is None:
         due_date = datetime.now() + timedelta(days=1)
     
-    # Apply due date if parsed or auto-set
+    metadata = {}
     if due_date:
-        post['due'] = due_date.strftime(DATE_TIME)
+        metadata["due"] = due_date.strftime(DATE_TIME)
     
     # Apply tags if any were parsed
     if tags:
-        existing_tags = post.get('tags', []) or []
-        if isinstance(existing_tags, str):
-            existing_tags = [existing_tags]
-        # Add new tags, avoiding duplicates
-        for tag in tags:
-            if tag not in existing_tags:
-                existing_tags.append(tag)
-        post['tags'] = existing_tags
+        metadata["tags"] = tags
     
     # Apply priority if parsed
     if priority:
-        post['priority'] = priority
+        metadata["priority"] = priority
 
-    # Append remaining text if provided
-    if text_to_append:
-        post.content = post.content.rstrip() + f"\n{text_to_append}"
+    transition_entry(
+        notes_dir,
+        note.path.stem,
+        status,
+        result=text_to_append,
+        metadata=metadata,
+        sync=display,
+    )
 
-    with open(file_path, 'wb') as f:
-        frontmatter.dump(post, f, sort_keys=False)
-
-    # Run sync for immediate feedback (for single file) or batch (for bulk)
     if display:
-        runner = MaintenanceRunner(notes_dir)
-        runner.sync([str(file_path)])
-
         # Status display
         symbol = STATUS_SYMBOLS.get(status, "")
         click.echo(f"{symbol} {note.title}: {old_status} → {click.style(status, bold=True)}")
@@ -1039,8 +785,7 @@ def expand(name: str):
         subtask_post['title'] = short_title
         
         # Write subtask with correct status
-        with open(subtask_path, 'wb') as f:
-            frontmatter.dump(subtask_post, f, sort_keys=False)
+        save_note(subtask_path, subtask_post)
         
         created_files.append((safe_name, subtask_filename, task_status))
         log_verbose(f"  Created {subtask_filename} (status: {task_status})")
@@ -1050,8 +795,7 @@ def expand(name: str):
     post.content = new_content
 
     # Write updated task file
-    with open(task_file, 'wb') as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(task_file, post)
 
     # Add subtask links to the task file (now acting as group)
     for safe_name, subtask_filename, _ in created_files:
@@ -1197,7 +941,7 @@ def extract(line_range: str, name: str | None, keep: bool, source: str):
         content = content.replace("## Description\n", f"## Description\n\n{body}\n", 1)
     else:
         content = content.rstrip("\n") + f"\n\n{body}\n"
-    target_path.write_text(content)
+    atomic_write_text(target_path, content)
 
     # Keep the original bullet, but never a checkbox one: MaintenanceRunner
     # treats `- [ ] [Title](stem.md)` as a task entry and sort_tasks_in_parent
@@ -1218,7 +962,7 @@ def extract(line_range: str, name: str | None, keep: bool, source: str):
         lines[at + len(block):at + len(block)] = [link_line]
     else:
         lines[at:at + len(block)] = [link_line]
-    source_path.write_text("\n".join(lines))
+    atomic_write_text(source_path, "\n".join(lines))
 
     MaintenanceRunner(notes_dir).sync([str(source_path), str(target_path)])
 

@@ -18,6 +18,7 @@ from ..schema import VALID_PRIORITY, VALID_PROJECT_STATUS, VALID_TASK_STATUS, ST
 from ..core.links import LinkPatterns
 from ..core.archive import ArchiveManager
 from ..core.files import FileIterator, load_note, save_note
+from ..core.storage import atomic_write_text
 from ..dependencies import RELATION_FIELDS
 
 
@@ -695,7 +696,7 @@ class MaintenanceRunner:
 
         if new_content != content:
             if not self.dry_run:
-                filepath.write_text(new_content)
+                atomic_write_text(filepath, new_content)
             return True
 
         return False
@@ -752,7 +753,7 @@ class MaintenanceRunner:
 
         if new_content != content:
             if not self.dry_run:
-                filepath.write_text(new_content)
+                atomic_write_text(filepath, new_content)
             return True
         return False
 
@@ -789,7 +790,7 @@ class MaintenanceRunner:
 
         if new_content != parent_content:
             if not self.dry_run:
-                parent_path.write_text(new_content)
+                atomic_write_text(parent_path, new_content)
             updated.append(str(parent_path))
 
         return updated
@@ -819,7 +820,7 @@ class MaintenanceRunner:
 
             if new_content != content:
                 if not self.dry_run:
-                    child_path.write_text(new_content)
+                    atomic_write_text(child_path, new_content)
                 updated.append(str(child_path))
 
         return updated
@@ -840,7 +841,7 @@ class MaintenanceRunner:
 
         if new_content != content:
             if not self.dry_run:
-                parent_path.write_text(new_content)
+                atomic_write_text(parent_path, new_content)
             return True
 
         return False
@@ -1046,7 +1047,7 @@ class MaintenanceRunner:
                     new_content = re.sub(pattern, '', content, flags=re.MULTILINE)
                     if new_content != content:
                         if not self.dry_run:
-                            old_parent_path.write_text(new_content)
+                            atomic_write_text(old_parent_path, new_content)
                         if str(old_parent_path) not in updated:
                             updated.append(str(old_parent_path))
 
@@ -1060,7 +1061,7 @@ class MaintenanceRunner:
                     
                     if renamed_file_path.exists():
                         meta = get_frontmatter(str(renamed_file_path))
-                        if meta:
+                        if meta and meta.get("type") == "task":
                             from ..schema import get_status_symbol
                             
                             task_status = meta.get('status', 'todo')
@@ -1112,7 +1113,7 @@ class MaintenanceRunner:
                                 
                                 new_content = "\n".join(new_lines)
                                 if not self.dry_run:
-                                    new_parent_path.write_text(new_content)
+                                    atomic_write_text(new_parent_path, new_content)
                                 if str(new_parent_path) not in updated:
                                     updated.append(str(new_parent_path))
 
@@ -1145,7 +1146,7 @@ class MaintenanceRunner:
                         
                         if new_content != content:
                             if not self.dry_run:
-                                renamed_file_path.write_text(new_content)
+                                atomic_write_text(renamed_file_path, new_content)
                             if str(renamed_file_path) not in updated:
                                 updated.append(str(renamed_file_path))
                 
@@ -1166,7 +1167,7 @@ class MaintenanceRunner:
 
                     if new_content != content:
                         if not self.dry_run:
-                            parent_path.write_text(new_content)
+                            atomic_write_text(parent_path, new_content)
                         if str(parent_path) not in updated:
                             updated.append(str(parent_path))
 
@@ -1181,7 +1182,7 @@ class MaintenanceRunner:
 
                     if new_content != content:
                         if not self.dry_run:
-                            child_path.write_text(new_content)
+                            atomic_write_text(child_path, new_content)
                         if str(child_path) not in updated:
                             updated.append(str(child_path))
                     
@@ -1234,7 +1235,7 @@ class MaintenanceRunner:
 
             if new_content != content:
                 if not self.dry_run:
-                    parent_path.write_text(new_content)
+                    atomic_write_text(parent_path, new_content)
                 if str(parent_path) not in updated:
                     updated.append(str(parent_path))
 
@@ -1433,7 +1434,7 @@ class MaintenanceRunner:
 
             if new_content != content:
                 if not self.dry_run:
-                    parent_path.write_text(new_content)
+                    atomic_write_text(parent_path, new_content)
                 updated_projects.append(str(parent_path))
 
         return updated_projects
@@ -1512,7 +1513,7 @@ class MaintenanceRunner:
 
         if new_content != content:
             if not self.dry_run:
-                parent_path.write_text(new_content)
+                atomic_write_text(parent_path, new_content)
             return True
 
         return False

@@ -18,14 +18,14 @@ import click
 
 from ..completions import complete_relation_target
 from ..config import get_focused_project
-from ..core.continuation import apply_continuation_context
 from ..core.notes import parse_note
-from ..core.relations import add_relation, remove_relation, resolve_note, _all_notes
+from ..core.operations import relate_entries
+from ..core.relations import _all_notes, resolve_note
 from ..dependencies import RELATION_FIELDS, get_relations
 from ..exceptions import NotFoundError
 from ..search import resolve_file_fuzzy
-from ..sync.runner import MaintenanceRunner
 from ..utils import get_notes_dir, require_init, log_info
+from ..core.transactions import transactional_command
 
 RELATION_CHOICES = click.Choice(sorted(RELATION_FIELDS))
 
@@ -53,6 +53,7 @@ def _resolve(name: str, include_archived: bool) -> str | None:
 @click.argument("note", shell_complete=complete_relation_target)
 @click.argument("targets", nargs=-1, required=True, shell_complete=complete_relation_target)
 @require_init
+@transactional_command
 def rel_add(field: str, note: str, targets: tuple[str, ...]):
     """Relate NOTE to one or more TARGETS.
 
@@ -79,28 +80,13 @@ def rel_add(field: str, note: str, targets: tuple[str, ...]):
             return
         target_stems.append(stem)
 
-    added = add_relation(notes_dir, note_stem, target_stems, field)
+    added = relate_entries(
+        notes_dir, note_stem, field, target_stems
+    )["targets"]
 
     if not added:
         log_info(f"No new {field} links to add for {note_stem}")
         return
-
-    changed = [resolve_note(notes_dir, note_stem)[0]]
-
-    # Continuing a project also pulls the predecessor's Goal into the new
-    # file, which is the point of the relation.
-    if field == "continues":
-        note_path, _ = resolve_note(notes_dir, note_stem)
-        copied = apply_continuation_context(notes_dir, note_path, added)
-        if copied:
-            click.echo(
-                f"Copied context from {', '.join(copied)} into {note_stem}"
-            )
-
-    # Let the maintenance runner normalize the archive/ link prefixes it just
-    # became responsible for. Writing them by hand is what the prefix bug class
-    # keeps coming from.
-    MaintenanceRunner(notes_dir).sync([str(p) for p in changed])
 
     for target in added:
         click.echo(
@@ -119,6 +105,7 @@ def rel_add(field: str, note: str, targets: tuple[str, ...]):
 @click.argument("note", shell_complete=complete_relation_target)
 @click.argument("targets", nargs=-1, required=True, shell_complete=complete_relation_target)
 @require_init
+@transactional_command
 def rel_rm(field: str, note: str, targets: tuple[str, ...]):
     """Remove a relation from NOTE to one or more TARGETS.
 
@@ -141,7 +128,9 @@ def rel_rm(field: str, note: str, targets: tuple[str, ...]):
             return
         target_stems.append(stem)
 
-    removed = remove_relation(notes_dir, note_stem, target_stems, field)
+    removed = relate_entries(
+        notes_dir, note_stem, field, target_stems, remove=True
+    )["targets"]
 
     if not removed:
         log_info(f"No {field} links to remove from {note_stem}")

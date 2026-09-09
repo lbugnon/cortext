@@ -12,6 +12,8 @@ Tests cover:
 
 import pytest
 import frontmatter
+
+from cor.core.files import save_note
 from datetime import date
 from click.testing import CliRunner
 
@@ -242,8 +244,7 @@ This is a feature with subtasks:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         # Expand task to group
         result = runner.invoke(cli, ["expand", "myproj.feature"])
@@ -270,8 +271,7 @@ This is a feature with subtasks:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         runner.invoke(cli, ["expand", "myproj.feature"])
         
@@ -296,8 +296,7 @@ This is a feature with subtasks:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         runner.invoke(cli, ["expand", "myproj.feature"])
         
@@ -316,8 +315,7 @@ This is a feature with subtasks:
         task_file = initialized_vault / "myproj.feature.md"
         post = frontmatter.load(task_file)
         post.content = "## Description\n\n- [ ] subtask1\n"
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         runner.invoke(cli, ["expand", "myproj.feature"])
         
@@ -363,8 +361,7 @@ This is a feature with subtasks:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
 
         runner.invoke(cli, ["expand", "myproj.feature"])
 
@@ -394,8 +391,7 @@ Mix of different statuses:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         runner.invoke(cli, ["expand", "myproj.feature"])
         
@@ -452,8 +448,7 @@ Mix of different statuses:
 
 ## Solution
 """
-        with open(task_file, 'wb') as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task_file, post)
         
         result = runner.invoke(cli, ["expand", "myproj.feature"])
         assert result.exit_code == 0, f"Expand failed: {result.output}"

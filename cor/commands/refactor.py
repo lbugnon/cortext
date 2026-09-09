@@ -22,6 +22,9 @@ from ..utils import (
     expand_glob_pattern,
 )
 from ..config import get_focused_project
+from ..core.refactor import move_entry
+from ..core.operations import create_entry, resolve_exact
+from ..core.transactions import VaultTransaction
 
 
 @click.command(short_help="Rename projects/tasks; supports parent shortcuts")
@@ -136,254 +139,19 @@ def rename(archived: bool, dry_run: bool, old_name: str, new_name: str):
                 resolved_new_name = f"{new_parent}.{leaf}"
 
 
-    # Collect all files to rename (main file + children)
-    files_to_rename: list[tuple] = []
+    if dry_run:
+        click.echo(f"Would move {old_name} → {resolved_new_name}")
+        return
 
-    # Main file
-    new_main_file = target_dir / f"{resolved_new_name}.md"
-    if new_main_file.exists():
-        raise AlreadyExistsError(f"Target already exists: {new_main_file}")
-    files_to_rename.append((main_file, new_main_file))
-
-    # Find all children (files starting with old_name.)
-    for search_dir in [notes_dir, archive_dir] if archive_dir.exists() else [notes_dir]:
-        for child in search_dir.glob(f"{old_name}.*.md"):
-            # Replace old prefix with new prefix
-            child_suffix = child.stem[len(old_name):]  # e.g., ".task_name"
-            new_child_name = f"{resolved_new_name}{child_suffix}.md"
-            new_child_path = search_dir / new_child_name
-
-            if new_child_path.exists():
-                raise AlreadyExistsError(f"Target already exists: {new_child_path}")
-            files_to_rename.append((child, new_child_path))
-
-    # Collect all files that need link updates
-    files_to_update_links: list = []
-
-    # All notes that might reference the renamed files
-    for search_dir in [notes_dir, archive_dir] if archive_dir.exists() else [notes_dir]:
-        for md_file in search_dir.glob("*.md"):
-            files_to_update_links.append(md_file)
-
-
-
-    # Auto-create target group if needed (for task/note moves to project.group)
-    if note.note_type in ("task", "note"):
-        resolved_parts = resolved_new_name.split(".")
-        # Parent is project or project.group; create group if len>=3 and group missing
-        if len(resolved_parts) >= 3:
-            project = resolved_parts[0]
-            group_name = resolved_parts[1]
-            parent_group_stem = f"{project}.{group_name}"
-            parent_group_path = (archive_dir if in_archive else notes_dir) / f"{parent_group_stem}.md"
-            project_path = (archive_dir if in_archive else notes_dir) / f"{project}.md"
-            if not project_path.exists():
-                raise NotFoundError(f"Project not found: {project}.md")
-            if not parent_group_path.exists():
-                # Create group file from task template
-                log_info(click.style("Creating target group:", fg="cyan"))
-                project_note = parse_note(project_path)
-                project_title = project_note.title if project_note else format_title(project)
-                template = get_template("task")
-                content = render_template(template, group_name, parent=project, parent_title=project_title)
-                parent_group_path.write_text(content)
-                # Add group to project's Tasks section
-                add_task_to_project(project_path, group_name, parent_group_stem)
-                log_info(f"  Created {parent_group_path}")
-
-    # Perform renames
-    log_info(click.style("Renaming files:", fg="cyan"))
-    for old_path, new_path in files_to_rename:
-        shutil.move(str(old_path), str(new_path))
-        log_verbose(f"  {old_path} → {new_path}")
-
-    # Handle parent changes and link updates using maintenance infrastructure
-    from ..sync import MaintenanceRunner
-    runner = MaintenanceRunner(notes_dir)
-    
-    # Prepare list of renames for handle_renamed_files (relative paths)
-    renamed_list = []
-    for old_path, new_path in files_to_rename:
-        # Convert to relative paths from notes_dir
-        try:
-            old_rel = old_path.relative_to(notes_dir)
-        except ValueError:
-            # File is in archive
-            old_rel = old_path.relative_to(notes_dir.parent)
-        
-        try:
-            new_rel = new_path.relative_to(notes_dir)
-        except ValueError:
-            # File is in archive
-            new_rel = new_path.relative_to(notes_dir.parent)
-        
-        renamed_list.append((str(old_rel), str(new_rel)))
-    
-    if renamed_list:
-        log_info(click.style("\nHandling parent changes and link updates:", fg="cyan"))
-        updated, errors = runner.handle_renamed_files(renamed_list)
-        
-        if errors:
-            for error in errors:
-                log_info(click.style(f"  Warning: {error}", fg="yellow"))
-        
-        if updated:
-            for file_path in updated:
-                log_verbose(f"  Updated: {file_path}")
-
-    # Update links in all files
-    log_info(click.style("\nUpdating additional links:", fg="cyan"))
-    for file_path in files_to_update_links:
-        # Re-check if file exists (might have been renamed)
-        if not file_path.exists():
-            # Find the new path if this file was renamed
-            for old_path, new_path in files_to_rename:
-                if old_path == file_path:
-                    file_path = new_path
-                    break
-
-        if not file_path.exists():
-            continue
-
-        content = file_path.read_text()
-        original_content = content
-        updates = []
-
-        for old_path, new_path in files_to_rename:
-            old_stem = old_path.stem
-            new_stem = new_path.stem
-            
-            # Get base name for title formatting (last part after dot)
-            old_parts = old_stem.split(".")
-            new_parts = new_stem.split(".")
-            new_base = new_parts[-1] if new_parts else new_stem
-            new_title = format_title(new_base)
-
-            # Update backlinks with title: [< Old Title](old.md) → [< New Title](new.md)
-            # Match flexible whitespace: [< ... ](old_stem.md) where ... is any text
-            backlink_pattern = rf'\[<\s+[^\]]*\]\({re.escape(old_stem)}\.md\)'
-            if re.search(backlink_pattern, content):
-                content = re.sub(backlink_pattern, rf'[< {new_title}]({new_stem}.md)', content)
-                updates.append(f"[< ...] → [< {new_title}]")
-
-            # Update archive backlinks: [< Old Title](../old.md) → [< New Title](../new.md)
-            archive_backlink_pattern = rf'\[<\s+[^\]]*\]\(\.\./{re.escape(old_stem)}\.md\)'
-            if re.search(archive_backlink_pattern, content):
-                content = re.sub(archive_backlink_pattern, rf'[< {new_title}](../{new_stem}.md)', content)
-                updates.append(f"[< ...] (archive) → [< {new_title}] (archive)")
-
-            # Update regular links: [Title](filename.md) → [Title](new_filename.md)
-            # But skip backlinks (those starting with <)
-            pattern = rf'\[(?<!<\s)([^\]]+)\]\({re.escape(old_stem)}\.md\)'
-            if re.search(pattern, content):
-                content = re.sub(pattern, rf'[\1]({new_stem}.md)', content)
-                updates.append(f"({old_stem}.md) → ({new_stem}.md)")
-
-            # Update archive links: [Title](archive/filename.md) → [Title](archive/new_filename.md)
-            # But skip backlinks
-            pattern = rf'\[(?<!<\s)([^\]]+)\]\(archive/{re.escape(old_stem)}\.md\)'
-            if re.search(pattern, content):
-                content = re.sub(pattern, rf'[\1](archive/{new_stem}.md)', content)
-                updates.append(f"(archive/{old_stem}.md) → (archive/{new_stem}.md)")
-
-        if content != original_content:
-            file_path.write_text(content)
-            log_info(f"  {file_path}: {', '.join(set(updates))}")
-
-    # Update reverse links in renamed files (the [< Parent](parent) links)
-    log_info(click.style("\nUpdating reverse links:", fg="cyan"))
-    for old_path, new_path in files_to_rename:
-        if not new_path.exists():
-            continue
-
-        content = new_path.read_text()
-        original_content = content
-
-        # Get the new parent name from the new filename
-        new_parts = new_path.stem.split(".")
-        if len(new_parts) >= 2:
-            new_parent = ".".join(new_parts[:-1])
-            old_parts = old_path.stem.split(".")
-            old_parent = ".".join(old_parts[:-1]) if len(old_parts) >= 2 else None
-
-            if old_parent and old_parent != new_parent:
-                # Get the base name of the new parent for title formatting
-                parent_parts = new_parent.split(".")
-                parent_base_name = parent_parts[-1] if len(parent_parts) > 0 else new_parent
-                new_parent_title = format_title(parent_base_name)
-                
-                # Update parent frontmatter
-                content = re.sub(
-                    rf'^(parent:\s*){re.escape(old_parent)}$',
-                    rf'\1{new_parent}',
-                    content,
-                    flags=re.MULTILINE,
-                )
-
-                # Update reverse link with proper title format
-                # Match any link text to the old parent and replace with new parent link and title
-                pattern = rf'\[([^\]]*)\]\({re.escape(old_parent)}\.md\)'
-                if re.search(pattern, content):
-                    content = re.sub(pattern, rf'[< {new_parent_title}]({new_parent}.md)', content)
-
-                pattern = rf'\[([^\]]*)\]\(archive/{re.escape(old_parent)}\.md\)'
-                if re.search(pattern, content):
-                    content = re.sub(pattern, rf'[< {new_parent_title}](archive/{new_parent}.md)', content)
-
-        if content != original_content:
-            new_path.write_text(content)
-            log_info(f"  Updated parent link in {new_path}")
-
-    # Update titles in renamed files
-    log_info(click.style("\nUpdating titles:", fg="cyan"))
-    for old_path, new_path in files_to_rename:
-        if not new_path.exists():
-            continue
-
-        # Determine if this is a project (no dots in stem)
-        is_project = "." not in new_path.stem
-        
-        # Get the base name for title formatting
-        if is_project:
-            # For project, use the full name
-            base_name = new_path.stem
-        else:
-            # For tasks/groups, use the last part
-            parts = new_path.stem.split(".")
-            base_name = parts[-1]
-        
-        # Format the new title
-        new_title = format_title(base_name)
-        
-        # Update the title in the file
-        content = new_path.read_text()
-        original_content = content
-        
-        # Try to update the H1 heading (# Title)
-        lines = content.split('\n')
-        updated = False
-        
-        for i, line in enumerate(lines):
-            # Look for the first H1 heading (outside frontmatter)
-            if line.startswith('# ') and i > 0:  # Skip if it's in frontmatter area
-                # Check if we're past frontmatter
-                in_frontmatter = False
-                for j in range(i):
-                    if lines[j].strip() == '---':
-                        in_frontmatter = not in_frontmatter
-                
-                if not in_frontmatter:
-                    old_title = line[2:].strip()
-                    lines[i] = f"# {new_title}"
-                    updated = True
-                    log_info(f"  {new_path}: '{old_title}' → '{new_title}'")
-                    break
-        
-        if updated:
-            content = '\n'.join(lines)
-            new_path.write_text(content)
-
-    log_info(click.style("\nDone!", fg="green"))
+    with VaultTransaction(notes_dir):
+        destination_parent = resolved_new_name.rpartition(".")[0]
+        if note.note_type in {"task", "note"} and destination_parent:
+            try:
+                resolve_exact(notes_dir, destination_parent)
+            except NotFoundError:
+                create_entry(notes_dir, "task", destination_parent)
+        outcome = move_entry(notes_dir, old_name, resolved_new_name)
+    click.echo(f"Moved {len(outcome['moved'])} file(s): {old_name} → {resolved_new_name}")
 
 
 @click.command(short_help="Create a group and move tasks under it")
