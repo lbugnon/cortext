@@ -203,6 +203,56 @@ tags: [coding, urgent]
 | `cor maintenance sync` | Manually run archive/status sync |
 | `cor maintenance hooks <install\|uninstall>` | Install/remove the pre-commit hook and completion |
 | `cor search <query>` | Full-text content search (supports filters: `status:`, `#tag`, `project:`) |
+| `cor get <stem> --json` | Read one exact entry with its content revision |
+| `cor update <stem> --section <heading> --json <text>` | Replace or append one Markdown section |
+| `cor batch [manifest.json]` | Apply structured operations as one atomic transaction |
+| `cor validate --json` | Validate vault documents, links, relations, and cycles |
+| `cor history --json` | List compact local transaction records |
+| `cor undo <transaction-id>` | Undo the latest unchanged committed transaction |
+| `cor recover [transaction-id]` | Restore the before-state of an interrupted transaction |
+
+### Agent and Automation Interface
+
+Machine commands use exact bare stems: no fuzzy matching, paths, or `.md`
+suffixes. JSON errors have the stable form
+`{"ok":false,"error":{"code":"conflict","message":"..."}}`.
+
+`cor get <stem> --json` returns the entry revision. Pass it to
+`cor update --expect-revision <revision>` to reject stale edits. Search can
+return compact JSON and be used as an inventory:
+
+```bash
+cor search --all --project research --type task --status active --json
+```
+
+`cor batch` reads a version-1 JSON manifest from a file or standard input. All
+operations commit or roll back together. Use `--dry-run` to validate without
+persisting and `--expect-revision` to guard the whole vault. A stable
+`request_id` makes retries idempotent.
+
+```json
+{
+  "version": 1,
+  "request_id": "research-plan-v1",
+  "operations": [
+    {"op": "create", "type": "project", "stem": "research",
+     "sections": {"Goal": "Evaluate a compact model."}},
+    {"op": "create", "type": "task", "stem": "research.measure",
+     "sections": {"Description": "Measure validation F1."}},
+    {"op": "transition", "stem": "research.measure", "status": "done",
+     "result": "Validation F1 was 0.32."},
+    {"op": "relate", "stem": "research", "relation": "related",
+     "targets": ["research.measure"]}
+  ]
+}
+```
+
+Supported batch operations are `create`, `update`, `move`, `transition`,
+`relate`, and `unrelate`. Run `cor validate --json` after larger changes. Cortex refuses new
+writes if a transaction was interrupted after its durable journal was created;
+inspect `cor history --json`, then run `cor recover [transaction-id]` to restore
+the saved before-state. Transaction history is local under `.git/cortex/` when
+the vault is a Git repository.
 
 ### Bulk Operations
 
@@ -354,11 +404,11 @@ cor vault default work              # used when nothing else says otherwise
 
 **Which vault am I in?** Cor resolves it in this order, and the first rule that matches wins:
 
-1. **cwd** — the nearest ancestor directory containing `backlog.md` (the vault marker)
-2. **`COR_VAULT`** environment variable
+1. **`COR_VAULT`** environment variable — an explicit vault selection
+2. **cwd** — the nearest ancestor directory containing `backlog.md` (the vault marker)
 3. **the default vault** from the config file
 
-Rule 1 means `cd ~/notes/work && cor daily` always does the obvious thing. It also means a directory that happens to contain a `backlog.md` is treated as a vault, so `cor` run inside an unrelated checkout may not target what you expect. `cor vault list` and `cor status` both print the active vault and which rule produced it.
+When `COR_VAULT` is unset, `cd ~/notes/work && cor daily` uses the vault containing the current directory. When it is set, it remains authoritative even while the process is inside another vault. `cor vault list` and `cor status` both print the active vault and which rule produced it.
 
 Rule 3 is a guess: nothing about your current location said which vault you meant. So **commands that write refuse to guess**. Outside a vault, `cor new task adas` asks which vault to use, and in a script or git hook — where there is nobody to ask — it fails with an error rather than writing to the wrong place. Read-only commands like `status` and `search` still fall back to the default silently.
 

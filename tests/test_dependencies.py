@@ -10,6 +10,8 @@ Tests cover:
 
 import pytest
 import frontmatter
+
+from cor.core.files import save_note
 from click.testing import CliRunner
 from datetime import date
 from pathlib import Path
@@ -175,8 +177,7 @@ class TestCoreDependencyFunctions:
         task1_path = vault_with_dependencies / "project1.task1.md"
         post = frontmatter.load(task1_path)
         post["status"] = "done"
-        with open(task1_path, "wb") as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task1_path, post)
 
         # Re-parse notes
         notes = find_notes(vault_with_dependencies)
@@ -198,8 +199,7 @@ class TestCoreDependencyFunctions:
         task1_path = vault_with_dependencies / "project1.task1.md"
         post = frontmatter.load(task1_path)
         post["status"] = "dropped"
-        with open(task1_path, "wb") as f:
-            frontmatter.dump(post, f, sort_keys=False)
+        save_note(task1_path, post)
 
         # Re-parse notes
         notes = find_notes(vault_with_dependencies)

@@ -5,6 +5,8 @@ from datetime import datetime
 import click
 import frontmatter
 
+from ..core.files import save_note
+
 from ..exceptions import ValidationError, NotFoundError
 from ..utils import get_notes_dir, require_init, log_info
 from ..schema import DATE_TIME
@@ -56,7 +58,6 @@ def log(text: str):
     post["modified"] = datetime.now().strftime(DATE_TIME)
     post.content = new_content
 
-    with open(backlog_path, "wb") as f:
-        frontmatter.dump(post, f, sort_keys=False)
+    save_note(backlog_path, post)
 
     log_info(click.style("Appended to backlog inbox.", fg="green"))

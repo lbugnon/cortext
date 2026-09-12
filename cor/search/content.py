@@ -167,6 +167,7 @@ def parse_search_query(query: str) -> tuple[str, dict]:
         - status:value (e.g., status:active)
         - #tag (e.g., #urgent)
         - project:name (e.g., project:foundation_model)
+        - type:value (project, task, or note)
 
     Args:
         query: Raw search query string
@@ -184,6 +185,8 @@ def parse_search_query(query: str) -> tuple[str, dict]:
             filters.setdefault("tags", []).append(part[1:])
         elif part.startswith("project:"):
             filters["project"] = part[8:]
+        elif part.startswith("type:"):
+            filters["type"] = part[5:]
         else:
             clean_parts.append(part)
 
@@ -212,7 +215,35 @@ def note_matches_filters(note, filters: dict) -> bool:
         if not (stem == project or stem.startswith(f"{project}.")):
             return False
 
+    if "type" in filters and note.note_type != filters["type"]:
+        return False
+
     return True
+
+
+def list_notes(
+    notes_dir: Path,
+    filters: dict,
+    *,
+    include_archived: bool = False,
+) -> list:
+    """Return metadata records matching structured filters."""
+    from ..core.notes import NoteMetadata
+
+    paths = sorted(notes_dir.glob("*.md"))
+    if include_archived:
+        paths += sorted((notes_dir / "archive").glob("*.md"))
+    results = []
+    for path in paths:
+        if path.name.startswith(".") or path.stem == "backlog":
+            continue
+        try:
+            note = NoteMetadata.from_file(path)
+        except Exception:
+            continue
+        if note_matches_filters(note, filters):
+            results.append(note)
+    return results
 
 
 def filter_matches(
