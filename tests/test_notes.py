@@ -462,10 +462,10 @@ class TestTimezoneConfig:
         monkeypatch.setattr("cor.config._config_dir", lambda: tmp_path)
         
         # Set a timezone
-        set_timezone("America/Argentina/Buenos_Aires")
+        set_timezone("Europe/Berlin")
         
         # Get should return what we set
-        assert get_timezone() == "America/Argentina/Buenos_Aires"
+        assert get_timezone() == "Europe/Berlin"
 
     def test_timezone_conversion_for_calendar(self):
         """Test timezone conversion logic for calendar events."""
@@ -475,21 +475,21 @@ class TestTimezoneConfig:
         except ImportError:
             from backports.zoneinfo import ZoneInfo
         
-        # Simulate user in Buenos Aires setting due: 2026-01-26 20:00
-        user_tz = ZoneInfo("America/Argentina/Buenos_Aires")
+        # Simulate a user in a fixed UTC+9 zone setting due: 2026-01-26 20:00
+        user_tz = ZoneInfo("Asia/Tokyo")
         due_datetime = datetime(2026, 1, 26, 20, 0)
         
         # Attach timezone and convert to UTC
         due_datetime_local = due_datetime.replace(tzinfo=user_tz)
         due_datetime_utc = due_datetime_local.astimezone(timezone.utc)
         
-        # Buenos Aires is UTC-3, so 20:00 BA = 23:00 UTC
-        assert due_datetime_utc.hour == 23
+        # UTC+9 without daylight saving, so 20:00 local = 11:00 UTC
+        assert due_datetime_utc.hour == 11
         assert due_datetime_utc.day == 26
         
         # Verify RFC3339 format
         rfc3339 = due_datetime_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        assert rfc3339 == "2026-01-26T23:00:00Z"
+        assert rfc3339 == "2026-01-26T11:00:00Z"
 
 
 class TestDueHelpers:

@@ -73,7 +73,7 @@ def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool,
 
     \b
     Continuing finished work (instead of resurrecting it from the archive):
-      cor new project screening-v2 -c screening-v1
+      cor new project pipeline-v2 -c pipeline-v1
       cor new project merged -c old-a -c old-b
     The predecessor stays archived and stays done; its Goal is copied into the
     new project for context.
