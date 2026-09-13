@@ -710,3 +710,18 @@ parent: myproject
         # Project should now be active
         meta = get_frontmatter(project)
         assert meta.get("status") == "active", f"Project should be active, got {meta.get('status')}"
+
+
+def test_hook_leaves_repository_documents_untouched(temp_vault):
+    """AGENTS.md and README.md are documents, not notes: no frontmatter injection."""
+    agents = temp_vault / "AGENTS.md"
+    readme = temp_vault / "README.md"
+    agents.write_text("# Working in this vault\n\nPlain instructions.\n")
+    readme.write_text("# Readme\n")
+    stage_files(temp_vault, agents, readme)
+
+    code, out, err = run_precommit(temp_vault)
+
+    assert code == 0, out + err
+    assert agents.read_text().startswith("# Working in this vault")
+    assert readme.read_text() == "# Readme\n"

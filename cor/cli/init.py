@@ -38,6 +38,36 @@ def _install_nvim_plugin(yes: bool = False):
         click.echo("  Warning: 'fd' not found. Install it for the plugin to work (e.g. sudo pacman -S fd).")
 
 
+AGENTS_FILENAME = "AGENTS.md"
+
+
+def _install_agents_file(vault_path: Path, yes: bool = False) -> Path | None:
+    """Install the instructions file that coding agents read from the vault root.
+
+    Missing: write it. Identical: nothing to do. Different (the user edited it,
+    or a newer cor ships a newer template): ask before overwriting, and never
+    overwrite silently under --yes.
+    """
+    source = Path(__file__).parent.parent / "assets" / "vault_agents.md"
+    dest = vault_path / AGENTS_FILENAME
+    content = source.read_text()
+    if dest.exists():
+        if dest.read_text() == content:
+            log_verbose(f"{AGENTS_FILENAME} is up to date.")
+            return None
+        if yes:
+            log_info(f"{AGENTS_FILENAME} exists and differs from the shipped version; left untouched.")
+            return None
+        if not click.confirm(
+            f"{AGENTS_FILENAME} exists and differs from the shipped version. Overwrite?",
+            default=False,
+        ):
+            return None
+    dest.write_text(content)
+    log_info(f"Agent instructions installed: {dest}")
+    return dest
+
+
 def _setup_calendar():
     """Set up Google Calendar integration during init."""
     from ..commands.calendar import _get_credentials
@@ -119,13 +149,17 @@ def _setup_telegram():
 @click.option("yes", "--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompts")
 @click.option("--with-calendar", is_flag=True, default=False, help="Set up Google Calendar integration")
 @click.option("--with-telegram", is_flag=True, default=False, help="Set up Telegram inbox integration")
-def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool):
+@click.option("--no-agent", is_flag=True, default=False,
+              help="Do not install AGENTS.md (instructions for coding agents)")
+def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool, no_agent: bool):
     """Initialize a new Cor vault.
 
     Creates the vault structure (notes/, templates/, backlog.md).
     Initializes git repository if not already present.
     Installs git hooks and configures shell completion automatically.
     Sets this directory as your vault path in the global config.
+    Installs AGENTS.md, the instructions any coding agent reads when run from
+    the vault (skip with --no-agent).
 
     Use --with-calendar to set up Google Calendar sync for due dates.
     Use --with-telegram to set up Telegram inbox for capturing notes.
@@ -205,6 +239,10 @@ def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool):
         subprocess.run(["git", "config", "user.email", "cor@local"], cwd=vault_path, capture_output=True)
         log_info("Git repository initialized.")
     
+    # Instructions for coding agents working in this vault
+    if not no_agent:
+        _install_agents_file(vault_path, yes)
+
     # Install git hooks
     _install_pre_commit_hook()
     _install_shell_completion()
@@ -371,14 +409,17 @@ def example_vault(ctx):
     
     # ===== REFERENCES =====
     log_info("Adding reference examples...")
-    # Add influential papers related to the foundation model project
+    # Add a few classic deep-learning papers related to the foundation model project
     run_cor("ref", "add", "10.48550/arXiv.1706.03762", "--key", "vaswani2017attention", "--no-edit")  # Attention Is All You Need
-    run_cor("ref", "add", "10.48550/arXiv.1810.04805", "--key", "devlin2018bert", "--no-edit")  # BERT
-    run_cor("ref", "add", "10.48550/arXiv.2005.14165", "--key", "brown2020gpt3", "--no-edit")  # GPT-3
-    run_cor("ref", "add", "10.48550/arXiv.2203.02155", "--no-edit")  # InstructGPT, key is optional
+    run_cor("ref", "add", "10.48550/arXiv.1412.6980", "--key", "kingma2014adam", "--no-edit")  # Adam
+    run_cor("ref", "add", "10.48550/arXiv.1512.03385", "--key", "he2015deep", "--no-edit")  # Deep residual learning
+    run_cor("ref", "add", "10.48550/arXiv.1207.0580", "--no-edit")  # Dropout, key is optional
     
     # ===== RENAME A PROJECT =====
     run_cor("rename", "evaluation_suite", "eval-suite")
+
+    # ===== AGENT INSTRUCTIONS =====
+    _install_agents_file(notes_dir, yes=True)
     
     click.echo("\n" + "="*60)
     click.echo("✓ Example vault created successfully!")
@@ -388,6 +429,8 @@ def example_vault(ctx):
     click.echo("  cor projects        # Overview of all projects")
     click.echo("  cor tree            # Hierarchical view")
     click.echo("  cor weekly          # Summarize recent work")
+    click.echo("\nWith a coding agent:")
+    click.echo("  open this directory with your agent and ask for the daily briefing (see AGENTS.md)")
     click.echo("\nEdit files with:")
     click.echo("  cor edit foundation_model")
     click.echo("  cor edit foundation_model.training_pipeline")
