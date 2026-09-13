@@ -22,6 +22,10 @@ from typing import Optional
 import frontmatter
 
 from ..schema import DATE_TIME
+from .files import is_repo_doc
+
+#: Lifecycle states after which a task or project no longer counts as open.
+CLOSED_STATUSES = ("done", "dropped")
 
 
 @dataclass
@@ -38,7 +42,7 @@ class NoteMetadata:
     status: Optional[str] = None
     created: Optional[datetime] = None
     modified: Optional[datetime] = None
-    due: Optional[date] = None
+    due: Optional[datetime] = None  # _parse_date always yields a datetime; see due_date
     priority: Optional[str] = None
     tags: list[str] = None
     requires: list[str] = None
@@ -125,6 +129,31 @@ class NoteMetadata:
         from ..utils import get_root_project
         return get_root_project(self.path.stem)
 
+    @property
+    def due_date(self) -> date | None:
+        """Calendar day of the due date, ignoring any time component."""
+        if self.due is None:
+            return None
+        if isinstance(self.due, datetime):
+            return self.due.date()
+        return self.due
+
+    @property
+    def due_has_time(self) -> bool:
+        """True when the due date carries a specific (non-midnight) time."""
+        return isinstance(self.due, datetime) and _date_has_time(self.due)
+
+    def days_until_due(self, today: date | None = None) -> int | None:
+        """Days from ``today`` to the due date.
+
+        Negative when overdue, zero when due today, None when undated. ``today``
+        is injectable so callers (and tests) can pin the reference day.
+        """
+        due = self.due_date
+        if due is None:
+            return None
+        return (due - (today or date.today())).days
+
 
 @dataclass
 class Note(NoteMetadata):
@@ -147,10 +176,10 @@ class Note(NoteMetadata):
         Returns:
             True if overdue, False otherwise
         """
-        if not self.due or self.status == "done":
+        if self.status in CLOSED_STATUSES:
             return False
-        due_date = self.due if isinstance(self.due, date) and not isinstance(self.due, datetime) else self.due.date() if hasattr(self.due, 'date') else self.due
-        return due_date < date.today()
+        days = self.days_until_due()
+        return days is not None and days < 0
 
     @property
     def is_due_this_week(self) -> bool:
@@ -159,11 +188,10 @@ class Note(NoteMetadata):
         Returns:
             True if due this week, False otherwise
         """
-        if not self.due or self.status == "done":
+        if self.status in CLOSED_STATUSES:
             return False
-        due_date = self.due if isinstance(self.due, date) and not isinstance(self.due, datetime) else self.due.date() if hasattr(self.due, 'date') else self.due
-        days_until = (due_date - date.today()).days
-        return 0 <= days_until <= 7
+        days = self.days_until_due()
+        return days is not None and 0 <= days <= 7
 
     @property
     def is_stale(self) -> bool:
@@ -186,8 +214,7 @@ class Note(NoteMetadata):
         """
         if not self.is_overdue:
             return 0
-        due_date = self.due if isinstance(self.due, date) and not isinstance(self.due, datetime) else self.due.date() if hasattr(self.due, 'date') else self.due
-        return (date.today() - due_date).days
+        return -self.days_until_due()
 
     @property
     def days_since_modified(self) -> int:
@@ -299,6 +326,15 @@ def _date_has_time(value: Optional[datetime]) -> bool:
     return value.hour != 0 or value.minute != 0
 
 
+def due_to_iso(value: Optional[datetime]) -> Optional[str]:
+    """Render a due value as ``YYYY-MM-DD``, or ``YYYY-MM-DD HH:MM`` when it has a time."""
+    if value is None:
+        return None
+    if isinstance(value, datetime) and _date_has_time(value):
+        return value.strftime(DATE_TIME)
+    return value.strftime("%Y-%m-%d")
+
+
 def parse_note(path: Path, metadata_only: bool = False):
     """Parse a note from file.
 
@@ -341,8 +377,8 @@ def find_notes(notes_dir: Path, metadata_only: bool = False) -> list:
     """
     notes = []
     for path in notes_dir.glob("*.md"):
-        # Skip hidden files and special files
-        if path.name.startswith(".") or path.stem == "backlog":
+        # Skip hidden files, the inbox, and repository documents (README.md, ...)
+        if path.name.startswith(".") or path.stem == "backlog" or is_repo_doc(path):
             continue
         try:
             if metadata_only:
@@ -353,3 +389,31 @@ def find_notes(notes_dir: Path, metadata_only: bool = False) -> list:
             print(f"Warning: Could not parse {path}: {e}")
 
     return notes
+
+
+def build_project_tags(notes) -> dict[str, set[str]]:
+    """Map each project stem to its tag set, so project tags propagate to children."""
+    return {
+        n.path.stem: set(n.tags or []) for n in notes if n.note_type == "project"
+    }
+
+
+def matches_tag(note, tag: str | None, project_tags: dict[str, set[str]]) -> bool:
+    """Return True if note matches the tag filter.
+
+    Tag matches if:
+    - tag is None (no filtering)
+    - tag equals the parent project name
+    - tag exists in note.tags
+    - tag exists in the parent project's tags (propagated)
+    """
+    if not tag:
+        return True
+    parent = note.parent_project
+    if parent and tag == parent:
+        return True
+    if tag in (note.tags or []):
+        return True
+    if parent and tag in project_tags.get(parent, set()):
+        return True
+    return False

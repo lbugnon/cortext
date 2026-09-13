@@ -187,7 +187,7 @@ def get_all_notes() -> list[str]:
         return []
     notes = []
     for p in notes_dir.glob("*.md"):
-        if p.stem != "backlog":
+        if p.stem != "backlog" and not p.stem.isupper():
             notes.append(p.stem)
     return sorted(notes)
 

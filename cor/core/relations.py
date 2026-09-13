@@ -18,6 +18,7 @@ from ..exceptions import NotFoundError, ValidationError
 from .archive import ArchiveManager
 from .files import save_note
 from .notes import NoteMetadata, _as_list
+from .files import is_repo_doc
 
 
 def _load(path: Path) -> frontmatter.Post:
@@ -40,7 +41,7 @@ def _all_notes(notes_dir: Path) -> list[NoteMetadata]:
         if not directory.exists():
             continue
         for path in sorted(directory.glob("*.md")):
-            if path.name.startswith(".") or path.stem == "backlog":
+            if path.name.startswith(".") or path.stem == "backlog" or is_repo_doc(path):
                 continue
             try:
                 notes.append(NoteMetadata.from_file(path))

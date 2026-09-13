@@ -11,6 +11,7 @@ from . import cli, _install_pre_commit_hook, _install_shell_completion, _uninsta
 from ..completions import complete_existing_name
 from ..utils import get_notes_dir, require_init, log_info
 from ..sync import MaintenanceRunner
+from ..core.files import is_repo_doc
 
 
 @cli.command()
@@ -200,7 +201,7 @@ def maintenance_sync(sync_all: bool):
 
     # Get files to sync
     if sync_all:
-        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog"]
+        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog" and not is_repo_doc(p)]
         archive_dir = notes_dir / "archive"
         if archive_dir.exists():
             files += [str(p) for p in archive_dir.glob("*.md")]
@@ -350,7 +351,7 @@ def maintenance_check_titles(fix: bool, archived: bool):
     # Collect files to check
     files: list[Path] = [
         p for p in notes_dir.glob("*.md")
-        if p.stem != "backlog"
+        if p.stem != "backlog" and not is_repo_doc(p)
     ]
     if archived and archive_dir.exists():
         files.extend(archive_dir.glob("*.md"))

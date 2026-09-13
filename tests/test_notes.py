@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, date
 from pathlib import Path
-from cor.core.notes import Note, NoteMetadata, parse_note, parse_metadata, find_notes
+from cor.core.notes import Note, NoteMetadata, parse_note, parse_metadata, find_notes, due_to_iso
 
 
 @pytest.fixture
@@ -491,3 +491,43 @@ class TestTimezoneConfig:
         rfc3339 = due_datetime_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         assert rfc3339 == "2026-01-26T23:00:00Z"
 
+
+class TestDueHelpers:
+    """Due-date normalisation shared by the note model, the agenda, and search."""
+
+    def test_dropped_task_is_not_overdue(self, overdue_task):
+        overdue_task.write_text(overdue_task.read_text().replace("status: active", "status: dropped"))
+        note = Note.from_file(overdue_task)
+        assert note.is_overdue is False
+        assert note.days_overdue == 0
+        assert note.is_due_this_week is False
+
+    def test_done_task_is_not_overdue(self, overdue_task):
+        overdue_task.write_text(overdue_task.read_text().replace("status: active", "status: done"))
+        assert Note.from_file(overdue_task).is_overdue is False
+
+    def test_date_only_due(self, overdue_task):
+        meta = NoteMetadata.from_file(overdue_task)
+        assert meta.due_date == date(2020, 1, 1)
+        assert meta.due_has_time is False
+        assert meta.days_until_due(date(2020, 1, 4)) == -3
+        assert meta.days_until_due(date(2019, 12, 30)) == 2
+        assert due_to_iso(meta.due) == "2020-01-01"
+
+    def test_timed_due(self, tmp_path):
+        timed = tmp_path / "timed.md"
+        timed.write_text("---\ntype: task\nstatus: todo\ndue: 2026-09-13 15:00\n---\n# Timed\n")
+        meta = NoteMetadata.from_file(timed)
+        assert meta.due_has_time is True
+        assert meta.due_date == date(2026, 9, 13)
+        assert meta.days_until_due(date(2026, 9, 13)) == 0
+        assert due_to_iso(meta.due) == "2026-09-13 15:00"
+
+    def test_undated(self, tmp_path):
+        undated = tmp_path / "undated.md"
+        undated.write_text("---\ntype: task\nstatus: todo\n---\n# Undated\n")
+        meta = NoteMetadata.from_file(undated)
+        assert meta.due_date is None
+        assert meta.due_has_time is False
+        assert meta.days_until_due() is None
+        assert due_to_iso(None) is None

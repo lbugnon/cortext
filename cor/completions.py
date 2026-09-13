@@ -14,6 +14,7 @@ from .utils import (
 )
 from .search.completion import complete_files_with_fuzzy, complete_filtered_with_fuzzy
 from .config import get_focused_project
+from .core.files import is_repo_doc
 
 # NOTE: bibtexparser and .bibtex are imported lazily inside complete_ref().
 # .bibtex pulls in .crossref -> habanero -> httpx -> rich, ~340ms, and this
@@ -298,7 +299,7 @@ def complete_existing_name(ctx, param, incomplete: str) -> list:
 
     if not is_archive_path:
         for path in notes_dir.glob("*.md"):
-            if path.stem != "backlog" and not path.name.startswith("."):
+            if path.stem != "backlog" and not path.name.startswith(".") and not is_repo_doc(path):
                 # Filter to focused project if set
                 if focused:
                     if path.stem == focused or path.stem.startswith(f"{focused}."):
@@ -400,7 +401,7 @@ def complete_task_name(ctx, param, incomplete: str) -> list:
     # Collect active task file stems
     if not is_archive_path:
         for path in notes_dir.glob("*.md"):
-            if path.stem == "backlog":
+            if path.stem == "backlog" or is_repo_doc(path):
                 continue
             note = parse_metadata(path)
             if note and note.note_type == "task":

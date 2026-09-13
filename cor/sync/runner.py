@@ -17,7 +17,7 @@ import frontmatter
 from ..schema import VALID_PRIORITY, VALID_PROJECT_STATUS, VALID_TASK_STATUS, STATUS_SYMBOLS
 from ..core.links import LinkPatterns
 from ..core.archive import ArchiveManager
-from ..core.files import FileIterator, load_note, save_note
+from ..core.files import FileIterator, is_repo_doc, load_note, save_note
 from ..core.storage import atomic_write_text
 from ..dependencies import RELATION_FIELDS
 
@@ -326,7 +326,14 @@ class MaintenanceRunner:
             deleted: List of deleted files to clean up references for
         """
         result = SyncResult()
-        staged_files = list(files)  # Make a copy to modify
+        # Repository documents (README.md, AGENTS.md, ...) are not notes: never
+        # stamp them with frontmatter or validate them as entries.
+        staged_files = [f for f in files if not is_repo_doc(f)]
+        deleted = [f for f in (deleted or []) if not is_repo_doc(f)] or None
+        renamed = [
+            (old, new) for old, new in (renamed or [])
+            if not (is_repo_doc(old) or is_repo_doc(new))
+        ] or None
 
         # === SYNC OPERATIONS FIRST (fix links before validation) ===
 
@@ -941,7 +948,7 @@ class MaintenanceRunner:
 
         active = {
             p.stem for p in self.notes_dir.glob("*.md")
-            if p.stem != "backlog" and not p.name.startswith(".")
+            if p.stem != "backlog" and not p.name.startswith(".") and not is_repo_doc(p)
         }
         warnings = []
         for path in sorted(self.archive_dir.glob("*.md")):

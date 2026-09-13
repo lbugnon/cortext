@@ -8,6 +8,7 @@ from typing import Iterator
 
 from ..exceptions import NotFoundError
 from ..utils import get_notes_dir
+from ..core.files import is_repo_doc
 
 
 @dataclass
@@ -235,7 +236,7 @@ def list_notes(
         paths += sorted((notes_dir / "archive").glob("*.md"))
     results = []
     for path in paths:
-        if path.name.startswith(".") or path.stem == "backlog":
+        if path.name.startswith(".") or path.stem == "backlog" or is_repo_doc(path):
             continue
         try:
             note = NoteMetadata.from_file(path)
