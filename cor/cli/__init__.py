@@ -267,7 +267,8 @@ from ..commands.inbox import inbox
 from ..commands.dependencies import depend
 from ..commands.relations import rel
 from ..commands.refs import ref
-from ..commands.status import daily, projects, weekly, tree, status
+from ..commands.status import projects, weekly, tree, status
+from ..commands.daily import daily
 from ..commands.calendar import auth as calendar_auth
 from ..commands.calendar import sync as calendar_sync
 from ..commands.calendar import status as calendar_status

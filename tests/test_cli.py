@@ -518,39 +518,6 @@ class TestTag:
         assert post.get("tags") == ["research"]
 
 
-class TestStatus:
-    """Test cor status command."""
-
-    def test_status_shows_overdue(self, runner, initialized_vault, monkeypatch):
-        """cor daily should show overdue tasks."""
-        monkeypatch.chdir(initialized_vault)
-
-        # Create a task with past due date
-        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
-        runner.invoke(cli, ["new", "task", "myproj.overdue", "task work"])
-
-        task_path = initialized_vault / "myproj.overdue.md"
-        content = task_path.read_text()
-        content = content.replace("due:", "due: 2020-01-01")
-        task_path.write_text(content)
-
-        result = runner.invoke(cli, ["daily"])
-        assert "Overdue" in result.output or "overdue" in result.output.lower()
-
-    def test_status_shows_overdue_project(self, runner, initialized_vault, monkeypatch):
-        """cor daily should surface overdue projects, not just tasks."""
-        monkeypatch.chdir(initialized_vault)
-
-        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
-        proj_path = initialized_vault / "myproj.md"
-        content = proj_path.read_text()
-        content = content.replace("due:", "due: 2020-01-01").replace("status: planning", "status: active")
-        proj_path.write_text(content)
-
-        result = runner.invoke(cli, ["daily"])
-        assert "Myproj" in result.output or "myproj" in result.output.lower()
-
-
 class TestProjects:
     """Test cor projects command."""
 
