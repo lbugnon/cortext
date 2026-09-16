@@ -10,6 +10,8 @@ Tests cover:
 - cor group
 """
 
+from pathlib import Path
+
 import pytest
 import frontmatter
 
@@ -108,6 +110,57 @@ class TestNew:
         content = (initialized_vault / "myproj.mytask.md").read_text()
         assert "parent: myproj" in content, "Task should have parent field"
         assert "(myproj.md)" in content, "Task should have link to parent"
+
+    def test_new_root_task_has_no_dangling_parent_link(self, runner, initialized_vault, monkeypatch):
+        """A root task has no parent, so it must not carry an empty breadcrumb."""
+        monkeypatch.chdir(initialized_vault)
+
+        result = runner.invoke(cli, ["new", "task", "paper_3", "write it"])
+        assert result.exit_code == 0, f"New root task failed: {result.output}"
+
+        content = (initialized_vault / "paper_3.md").read_text()
+        assert "[< ](.md)" not in content, "Root task should not have a dangling link"
+        assert "[<" not in content, "Root task should have no breadcrumb at all"
+
+    def test_new_root_task_with_legacy_template(self, runner, initialized_vault, monkeypatch):
+        """Vault templates that hardcode the breadcrumb must still render cleanly."""
+        monkeypatch.chdir(initialized_vault)
+        template = initialized_vault / "templates" / "task.md"
+        template.write_text(
+            template.read_text().replace(
+                "{parent_link}", "[< {parent_title}]({parent}.md)"
+            )
+        )
+
+        assert runner.invoke(cli, ["new", "task", "paper_3", "write it"]).exit_code == 0
+        assert runner.invoke(cli, ["new", "project", "myproj", "--no-edit"]).exit_code == 0
+        assert runner.invoke(cli, ["new", "task", "myproj.mytask", "work"]).exit_code == 0
+
+        root = (initialized_vault / "paper_3.md").read_text()
+        assert "(.md)" not in root, "Legacy template should not leave a dangling link"
+        assert "# Paper 3\n\n## Description" in root, "Breadcrumb gap should close up"
+
+        child = (initialized_vault / "myproj.mytask.md").read_text()
+        assert "[< Myproj](myproj.md)" in child, "Parented tasks keep their breadcrumb"
+
+    def test_autocreated_parent_project_has_real_dates(self, runner, initialized_vault, monkeypatch):
+        """A project created as a missing parent must get usable created/modified."""
+        import re
+        from cor.cli.init import _migrate_legacy_breadcrumb  # noqa: F401
+
+        monkeypatch.chdir(initialized_vault)
+        # Use the packaged project template, not the test fixture one.
+        asset = Path(__import__("cor").__file__).parent / "assets" / "project.md"
+        (initialized_vault / "templates" / "project.md").write_text(asset.read_text())
+
+        assert runner.invoke(cli, ["new", "task", "newgroup.mytask", "work"]).exit_code == 0
+
+        post = frontmatter.loads((initialized_vault / "newgroup.md").read_text())
+        stamp = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+        assert isinstance(post["created"], str) and stamp.match(post["created"]), \
+            f"created should be a timestamp, got {post['created']!r}"
+        assert isinstance(post["modified"], str) and stamp.match(post["modified"]), \
+            f"modified should be a timestamp, got {post['modified']!r}"
 
     def test_new_task_added_to_project(self, runner, initialized_vault, monkeypatch):
         """New task should be added to project's Tasks section."""

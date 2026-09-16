@@ -1,9 +1,8 @@
 ---
 type: project
 status: planning
-created:
-  date:
-modified: 2026-07-31 23:54
+created: {date}
+modified: {date}
 priority:
 due:
 tags: []

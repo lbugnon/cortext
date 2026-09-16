@@ -1,5 +1,6 @@
 """Initialization commands for Cor CLI."""
 
+import re
 import subprocess
 import stat
 import shutil
@@ -36,6 +37,29 @@ def _install_nvim_plugin(yes: bool = False):
 
     if not shutil.which("fd"):
         click.echo("  Warning: 'fd' not found. Install it for the plugin to work (e.g. sudo pacman -S fd).")
+
+
+def _migrate_legacy_breadcrumb(template_path: Path) -> bool:
+    """Replace a hardcoded parent breadcrumb with the ``{parent_link}`` placeholder.
+
+    Vaults created before ``{parent_link}`` existed hold templates with a
+    literal ``[< {parent_title}]({parent}.md)``. That line cannot render for a
+    root entry (no parent), so it produced a dangling ``[< ](.md)``. Rewriting
+    just that line leaves any other customization of the template alone.
+
+    Returns True when the file was rewritten.
+    """
+    content = template_path.read_text()
+    migrated = re.sub(
+        r"^[ \t]*\[<[^\]]*\]\(\{parent\}\.md\)[ \t]*$",
+        "{parent_link}",
+        content,
+        flags=re.MULTILINE,
+    )
+    if migrated == content:
+        return False
+    template_path.write_text(migrated)
+    return True
 
 
 def _setup_calendar():
@@ -168,6 +192,8 @@ def init(ctx, yes: bool, with_calendar: bool, with_telegram: bool):
             content = (assets_dir / filename).read_text()
             path.write_text(content)
             log_verbose(f"Created {path}")
+        elif _migrate_legacy_breadcrumb(path):
+            log_verbose(f"Updated parent link in {path}")
 
     log_info("Cor vault initialized.")
 
