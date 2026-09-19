@@ -74,6 +74,20 @@ The test suite covers:
 - **Pre-commit hook**: Status sync, archiving, unarchiving, task groups, separators
 - **Edge cases**: Multi-task commits, group status propagation, link updates
 
+## Before you touch a vault
+
+**Read the vault's own instructions first.** `cor rules` prints them -- `AGENTS.md`, `CLAUDE.md`
+or `README.md`, whichever the vault has:
+
+```bash
+cd ~/my-vault && cor rules
+```
+
+A vault states its own scope, naming, hierarchy and confirmation boundary, and those override
+every default described below. This matters most for agents, and the reason is mechanical: **the
+vault is selected from the working directory**, so a command run from the wrong directory lands
+silently in the wrong vault, and a vault you were never meant to touch has no way to object.
+
 ## Quick Start
 
 ```bash

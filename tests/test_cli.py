@@ -993,3 +993,39 @@ class TestExampleVault:
         monkeypatch.setattr(subprocess, "run", guard)
         result = runner.invoke(cli, ["example-vault"])
         assert result.exit_code == 0, result.output
+
+
+# --------------------------------------------------------------- vault rules
+def test_help_states_the_must_read_rule():
+    """The reminder has to be where an agent using cor will see it, not only in docs.
+
+    This project's own failure mode: an agent worked a vault for hours without ever reading the
+    vault's AGENTS.md, which forbade most of what it did.
+    """
+    from click.testing import CliRunner
+    from cor.cli import cli
+    out = CliRunner().invoke(cli, ["--help"]).output
+    assert "MUST" in out
+    assert "AGENTS.md" in out
+    assert "cor rules" in out
+    assert "working directory" in out, "must warn that the vault comes from cwd"
+
+
+def test_rules_prints_the_vaults_own_instructions(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from cor.cli import cli
+    (tmp_path / "backlog.md").write_text("# Backlog\n")
+    (tmp_path / "AGENTS.md").write_text("# rules\nno touching other vaults\n")
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(cli, ["rules"]).output
+    assert "no touching other vaults" in out
+
+
+def test_rules_says_so_when_a_vault_states_none(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from cor.cli import cli
+    (tmp_path / "backlog.md").write_text("# Backlog\n")
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(cli, ["rules"]).output
+    assert "no AGENTS.md" in out or "no " in out
+    assert "Ask before assuming" in out

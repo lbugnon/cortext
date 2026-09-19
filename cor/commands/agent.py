@@ -160,6 +160,44 @@ def batch_cmd(source: str, dry_run: bool, expect_revision: str | None) -> None:
     })
 
 
+#: A vault states its own rules in one of these, checked in order.
+RULES_FILES = ("AGENTS.md", "CLAUDE.md", "README.md")
+
+
+@click.command(name="rules")
+@click.option("--path-only", is_flag=True, help="Print the path, not the contents.")
+@click.option("--json", "as_json", is_flag=True, help="Emit compact JSON.")
+@_machine_errors(flag="as_json")
+@require_init(write=False)
+def rules_cmd(path_only: bool, as_json: bool) -> None:
+    """Print this vault's own instructions (AGENTS.md, CLAUDE.md or README.md).
+
+    Exists so that "read the vault's rules before touching it" costs one command
+    instead of a guess about where they live. A vault's own file overrides any
+    default behaviour, and it is selected from the working directory -- so this
+    also shows which vault you are actually in.
+    """
+    notes_dir = Path(get_notes_dir())
+    found = next((notes_dir / name for name in RULES_FILES
+                  if (notes_dir / name).exists()), None)
+
+    if as_json:
+        _emit_json({
+            "vault": str(notes_dir),
+            "path": str(found) if found else None,
+            "contents": None if (found is None or path_only) else found.read_text(),
+        })
+        return
+
+    if found is None:
+        click.echo(f"{notes_dir}: no {' / '.join(RULES_FILES)}")
+        click.echo("This vault states no rules of its own. Ask before assuming defaults apply.")
+        return
+    click.echo(str(found) if path_only else found.read_text(), nl=not path_only)
+    if path_only:
+        click.echo()
+
+
 @click.command(name="validate")
 @click.option("--json", "as_json", is_flag=True, help="Emit compact JSON.")
 @_machine_errors(flag="as_json")

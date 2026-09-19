@@ -63,6 +63,13 @@ def cli(ctx, verbose: int):
     A lightweight tool for managing projects, tasks, and notes using
     plain text files and git.
 
+    MUST, for agents: before any command that reads or writes a vault, read
+    that vault's AGENTS.md or README.md. Run `cor rules` to print it. A vault
+    states its own scope, naming, hierarchy and confirmation boundary, and
+    those override every default here. Vaults are selected from the working
+    directory, so a command run from the wrong directory silently lands in the
+    wrong vault.
+
     Run `cor` with no command to open the interactive shell, which pins one
     vault for the session and shows its name in the prompt.
     """
@@ -279,6 +286,7 @@ from ..commands.agent import (
     recover_cmd,
     undo_cmd,
     update_cmd,
+    rules_cmd,
     validate_cmd,
 )
 from .search_cmd import search
@@ -315,6 +323,7 @@ cli.add_command(search)
 cli.add_command(get_cmd)
 cli.add_command(update_cmd)
 cli.add_command(batch_cmd)
+cli.add_command(rules_cmd)
 cli.add_command(validate_cmd)
 cli.add_command(history_cmd)
 cli.add_command(recover_cmd)
