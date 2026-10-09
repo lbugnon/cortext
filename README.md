@@ -4,13 +4,9 @@ modified: 2026-07-31 23:54
 
 <div align="center">
 
-<img src="logo.png" alt="Cor Logo" width="120" height="120">
-
 
 **Plain text knowledge management for the terminal**
 
-[![PyPI](https://img.shields.io/pypi/v/cor-text)](https://pypi.org/project/cor-text/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 </div>
 
