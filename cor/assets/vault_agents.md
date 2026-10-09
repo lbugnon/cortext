@@ -38,6 +38,27 @@ come from cor so they are exact:
 - `cor get <stem> --json [--body]`: one entry with its sections and `revision`.
 - `cor tree <project>`, `cor projects`, `cor weekly`: human views for context.
 
+## What belongs in an entry
+
+An entry records the decision and the result, not the engineering.
+
+- Task `Description`: the question or decision in one or two sentences, and why
+  it matters now. Task `Solution`: what came out — the number, the verdict, the
+  choice made. A finished task with an empty `Solution` has lost the only thing
+  worth keeping.
+- Project `Goal` is the deliverable in one sentence; `Done When` is a
+  falsifiable completion test.
+- Keep out: code, hyperparameters, config blocks, command lines, absolute
+  paths, git SHAs, `file.py:line` citations, raw stdout. Those belong in the
+  repository — name the repo, script or artifact instead of pasting from it.
+- A `note` is the shortest entry, not the loosest: a finding, a constraint, a
+  decision taken elsewhere, an idea worth trying later. Write it in full
+  sentences, but write only what you would want to be reminded of - no
+  transcripts, no output dumps, no running log of what was tried. A note that
+  keeps growing is a task or a project that has not been created yet.
+- One screen per entry. If it needs more, it is a project with tasks.
+- One language per vault.
+
 ## Write rules
 
 - Never edit `.md` files directly. Never run `git commit`, `git push` or
@@ -45,8 +66,9 @@ come from cor so they are exact:
 - Every change goes through `cor batch` as one manifest per agreed change set:
   - `update` with `metadata` for `due`, `priority`, `tags` and with
     `sections` or `append_sections` for Markdown sections.
-  - `transition` to change `status`, optionally with `result` text that is
-    appended to `## Solution` (tasks) or `## Summary` (projects).
+  - `transition` to change `status`, with `result` text that is appended to
+    `## Solution` (tasks) or `## Summary` (projects). Always pass `result`
+    when moving to `done` or `dropped`.
   - `create`, `move`, `relate` / `unrelate` (`requires`, `related`,
     `continues`).
 - Always dry-run first: `cor batch --dry-run manifest.json`. Then apply the

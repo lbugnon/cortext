@@ -320,6 +320,24 @@ with `cor init --no-agent`. If your agent expects a differently named
 instructions file, create one locally with a single line that includes
 `AGENTS.md`.
 
+`AGENTS.md` is only loaded when the agent runs from the vault. To reach the
+vault from anywhere else, put the same pointer in a user-level instruction file
+or skill: `cor` resolves its vault from `~/.config/cor/config.yaml`, so no extra
+plumbing is needed - the agent only has to know the vault exists.
+
+`cor/assets/claude_skill.md` is a ready-made Claude Code skill for that. It
+carries the read and write discipline and the content rules, and leaves the
+mechanics to the vault's `AGENTS.md`. Install it by hand, as a copy or a symlink:
+
+```sh
+mkdir -p ~/.claude/skills/cor
+ln -s "$(python -c 'import cor, pathlib; print(pathlib.Path(cor.__file__).parent)')/assets/claude_skill.md" \
+      ~/.claude/skills/cor/SKILL.md
+```
+
+Claude then picks the vault up from any directory - asking for the daily
+briefing or capturing a task no longer depends on where the session started.
+
 ### Bulk Operations
 
 Perform operations on multiple files at once using glob patterns:
