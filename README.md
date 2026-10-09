@@ -1,14 +1,5 @@
----
-modified: 2026-07-31 23:54
----
+# Plain text knowledge management for the terminal
 
-<div align="center">
-
-
-**Plain text knowledge management for the terminal**
-
-
-</div>
 
 Track projects, tasks, ideas, and progress using markdown files and git.
 
