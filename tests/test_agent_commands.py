@@ -438,3 +438,20 @@ def test_batch_move_collision_rolls_back_earlier_move(runner, temp_vault):
     assert (temp_vault / "project.one.md").exists()
     assert (temp_vault / "project.two.md").exists()
     assert not (temp_vault / "project.renamed.md").exists()
+
+
+def test_uppercase_root_documents_are_not_entries(runner, temp_vault):
+    from cor.core.notes import find_notes
+    from cor.core.transactions import managed_files
+
+    runner.invoke(cli, ["new", "project", "research", "--no-edit"])
+    for name in ("AGENTS.md", "README.md", "NOTES.md"):
+        (temp_vault / name).write_text(f"# {name}\n\nNo frontmatter here.\n")
+
+    # backlog.md is a managed entry; the three documents are not.
+    assert {path.name for path in managed_files(temp_vault)} == {"backlog.md", "research.md"}
+    assert {note.path.stem for note in find_notes(temp_vault)} == {"research"}
+    report = invoke_json(runner, ["validate", "--json"])
+    assert report["valid"] is True and report["files"] == 2
+    inventory = invoke_json(runner, ["search", "--all", "--type", "project", "--json"])
+    assert [entry["stem"] for entry in inventory] == ["research"]

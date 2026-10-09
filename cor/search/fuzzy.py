@@ -12,6 +12,7 @@ import click
 # time taxed every `cor` invocation - including each shell-completion Tab.
 from ..exceptions import NotFoundError
 from ..utils import get_notes_dir
+from ..core.files import is_repo_doc
 
 
 def get_all_file_stems(include_archived: bool = False) -> list[tuple[str, bool]]:
@@ -27,7 +28,7 @@ def get_all_file_stems(include_archived: bool = False) -> list[tuple[str, bool]]
 
     # Main directory files
     for path in notes_dir.glob("*.md"):
-        if path.stem != "backlog":
+        if path.stem != "backlog" and not is_repo_doc(path):
             results.append((path.stem, False))
 
     # Archived files
@@ -244,7 +245,7 @@ def get_task_file_stems(include_archived: bool = False) -> list[tuple[str, bool]
 
     # Main directory files
     for path in notes_dir.glob("*.md"):
-        if path.stem == "backlog":
+        if path.stem == "backlog" or is_repo_doc(path):
             continue
         note = parse_metadata(path)
         if note and note.note_type == "task":

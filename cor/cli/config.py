@@ -45,7 +45,7 @@ def config_cmd(key: str | None, value: str | None):
     Configuration Keys:
       verbosity    Output detail level (0=silent, 1=normal, 2=verbose, 3=debug)
       vault        Path to your notes directory
-      timezone     Timezone for calendar events (e.g., America/Argentina/Buenos_Aires)
+      timezone     Timezone for calendar events (e.g., Europe/Berlin)
       inbox        Telegram bot token for mobile inbox
 
     \b
@@ -53,7 +53,7 @@ def config_cmd(key: str | None, value: str | None):
       cor config                      Show all settings
       cor config verbosity 2          Set verbose output
       cor config vault ~/my-notes     Change vault location
-      cor config timezone America/Argentina/Buenos_Aires  Set timezone
+      cor config timezone Europe/Berlin  Set timezone
       cor config inbox <bot-token>    Configure Telegram inbox
     """
     # Show all config if no key provided
@@ -142,11 +142,11 @@ def config_cmd(key: str | None, value: str | None):
             click.echo("for Google Calendar sync.")
             click.echo()
             click.echo("Common timezones:")
-            click.echo("  America/Argentina/Buenos_Aires  (Buenos Aires)")
+            click.echo("  America/Sao_Paulo               (Brasilia)")
             click.echo("  America/New_York                (Eastern US)")
             click.echo("  America/Los_Angeles             (Pacific US)")
             click.echo("  Europe/London                   (London)")
-            click.echo("  Europe/Paris                    (Paris)")
+            click.echo("  Europe/Berlin                   (Berlin)")
             click.echo("  Asia/Tokyo                      (Tokyo)")
             click.echo()
             click.echo("Run 'cor config timezone <timezone>' to change")
@@ -159,7 +159,7 @@ def config_cmd(key: str | None, value: str | None):
                 click.echo(click.style(f"Timezone set to: {value}", fg="green"))
                 click.echo(f"Config saved to: {config_file()}")
             except Exception as e:
-                raise ValidationError(f"Invalid timezone: {value}. Use IANA timezone names like 'America/Argentina/Buenos_Aires'")
+                raise ValidationError(f"Invalid timezone: {value}. Use IANA timezone names like 'Europe/Berlin'")
 
     elif key == "inbox":
         if value is None:

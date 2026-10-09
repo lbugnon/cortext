@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from ..exceptions import ConflictError, ValidationError
+from .files import is_repo_doc
 from .storage import atomic_write_bytes, atomic_write_text, content_revision
 
 
@@ -24,7 +25,7 @@ _ACTIVE_TRANSACTION: contextvars.ContextVar["VaultTransaction | None"] = (
 def _managed_files(notes_dir: Path) -> list[Path]:
     files = [
         path for path in notes_dir.glob("*.md")
-        if path.name not in {"AGENTS.md", "README.md"}
+        if not is_repo_doc(path)
     ]
     archive = notes_dir / "archive"
     if archive.exists():
@@ -346,7 +347,7 @@ def _recoverable_relative_path(relative: str) -> bool:
     if path.is_absolute() or ".." in path.parts or path.suffix != ".md":
         return False
     if len(path.parts) == 1:
-        return path.name not in {"AGENTS.md", "README.md"}
+        return not is_repo_doc(path)
     return len(path.parts) == 2 and path.parts[0] == "archive"
 
 

@@ -1,7 +1,3 @@
----
-modified: 2026-07-31 23:54
----
-
 # Nvim Integration
 
 Cortex uses `[Title](stem.md)` for internal link targets, which enables
@@ -79,9 +75,9 @@ which is useful for navigating a long note.
 `<C-l>` and the relation pickers show frontmatter, not bare filenames:
 
 ```
-[planning] Glycoclip #cellco (glycoclip)
-[active]   Beca leonardo (beca_leonardo)
-[done]     Old screening run (old-screening) [archived]
+[planning] Evaluation suite #ml (evaluation_suite)
+[active]   Foundation model (foundation_model)
+[done]     Lr sweep (foundation_model.experiments.lr_sweep) [archived]
 ```
 
 Status, title, tags and stem are all on the line, so you can narrow by typing a

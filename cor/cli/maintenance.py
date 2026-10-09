@@ -11,6 +11,7 @@ from . import cli, _install_pre_commit_hook, _install_shell_completion, _uninsta
 from ..completions import complete_existing_name
 from ..utils import get_notes_dir, require_init, log_info
 from ..sync import MaintenanceRunner
+from ..core.files import is_repo_doc
 
 
 @cli.command()
@@ -200,7 +201,7 @@ def maintenance_sync(sync_all: bool):
 
     # Get files to sync
     if sync_all:
-        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog"]
+        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog" and not is_repo_doc(p)]
         archive_dir = notes_dir / "archive"
         if archive_dir.exists():
             files += [str(p) for p in archive_dir.glob("*.md")]
@@ -350,7 +351,7 @@ def maintenance_check_titles(fix: bool, archived: bool):
     # Collect files to check
     files: list[Path] = [
         p for p in notes_dir.glob("*.md")
-        if p.stem != "backlog"
+        if p.stem != "backlog" and not is_repo_doc(p)
     ]
     if archived and archive_dir.exists():
         files.extend(archive_dir.glob("*.md"))
@@ -414,6 +415,109 @@ def maintenance_check_titles(fix: bool, archived: bool):
 
     click.echo(click.style(f"\nFixed {fixed} file(s).", fg="green"))
 
+
+@maintenance.command("check-outcomes")
+@click.option("--archived", "-a", is_flag=True, help="Include archived notes in the scan")
+@click.option("--json", "as_json", is_flag=True, help="Emit the worklist as JSON")
+@require_init
+def maintenance_check_outcomes(archived: bool, as_json: bool):
+    """Check that finished entries record an outcome.
+
+    Reports two things an entry can be missing:
+
+    \b
+      - a finished entry (done or dropped) whose ## Solution (tasks) or
+        ## Summary (projects) is empty
+      - an entry still holding unfilled <!-- ... --> template comments
+
+    There is no --fix: an outcome cannot be written automatically.
+
+    \b
+    Examples:
+        cor maintenance check-outcomes
+        cor maintenance check-outcomes -a
+        cor maintenance check-outcomes -a --json
+    """
+    import json as json_module
+    import re
+
+    from ..core.content import sections
+    from ..core.files import get_all_note_files, load_note
+
+    notes_dir = get_notes_dir()
+    comment_re = re.compile(r"<!--.*?-->", re.DOTALL)
+    # Markers cor writes itself are not unfilled template prompts.
+    generated_re = re.compile(r"<!--\s*Auto-updated by cor\s*-->")
+
+    missing: list[dict] = []
+    placeholders: list[dict] = []
+
+    for file_path in sorted(get_all_note_files(notes_dir, include_archive=archived)):
+        post = load_note(file_path)
+        if post is None:
+            continue
+
+        note_type = post.get("type")
+        status = post.get("status")
+        body = post.content
+
+        stray = comment_re.findall(generated_re.sub("", body))
+        if stray:
+            placeholders.append({
+                "stem": file_path.stem,
+                "type": note_type,
+                "count": len(stray),
+            })
+
+        if status not in ("done", "dropped"):
+            continue
+        heading = "Summary" if note_type == "project" else "Solution"
+        text = sections(body).get(heading)
+        if text is None or not comment_re.sub("", text).strip():
+            missing.append({
+                "stem": file_path.stem,
+                "type": note_type,
+                "status": status,
+                "section": heading,
+                "present": text is not None,
+            })
+
+    if as_json:
+        click.echo(json_module.dumps({
+            "missing_outcome": missing,
+            "placeholders": placeholders,
+        }, indent=2))
+        return
+
+    if not missing and not placeholders:
+        click.echo(click.style("All finished entries record an outcome.", fg="green"))
+        return
+
+    if missing:
+        click.echo(f"{len(missing)} finished entry(ies) with no outcome:\n")
+        for item in missing:
+            note = "section missing" if not item["present"] else "empty"
+            click.echo(
+                f"  {click.style(item['stem'], bold=True)}"
+                f"  [{item['status']}]"
+                f"  ## {click.style(item['section'], fg='cyan')}"
+                f"  {click.style(note, fg='yellow')}"
+            )
+        click.echo()
+
+    if placeholders:
+        total = sum(item["count"] for item in placeholders)
+        click.echo(f"{total} unfilled template comment(s) in {len(placeholders)} file(s):\n")
+        for item in placeholders:
+            click.echo(
+                f"  {click.style(item['stem'], bold=True)}"
+                f"  {click.style(str(item['count']), fg='yellow')} placeholder(s)"
+            )
+        click.echo()
+
+    click.echo(
+        "Fill these through cor batch; a transition to done should carry a result."
+    )
 
 # rename command is defined in commands.refactor module and registered via register_additional_commands()
 

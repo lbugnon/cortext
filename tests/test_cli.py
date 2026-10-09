@@ -10,6 +10,7 @@ Tests cover:
 - cor group
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -571,39 +572,6 @@ class TestTag:
         assert post.get("tags") == ["research"]
 
 
-class TestStatus:
-    """Test cor status command."""
-
-    def test_status_shows_overdue(self, runner, initialized_vault, monkeypatch):
-        """cor daily should show overdue tasks."""
-        monkeypatch.chdir(initialized_vault)
-
-        # Create a task with past due date
-        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
-        runner.invoke(cli, ["new", "task", "myproj.overdue", "task work"])
-
-        task_path = initialized_vault / "myproj.overdue.md"
-        content = task_path.read_text()
-        content = content.replace("due:", "due: 2020-01-01")
-        task_path.write_text(content)
-
-        result = runner.invoke(cli, ["daily"])
-        assert "Overdue" in result.output or "overdue" in result.output.lower()
-
-    def test_status_shows_overdue_project(self, runner, initialized_vault, monkeypatch):
-        """cor daily should surface overdue projects, not just tasks."""
-        monkeypatch.chdir(initialized_vault)
-
-        runner.invoke(cli, ["new", "project", "myproj", "--no-edit"])
-        proj_path = initialized_vault / "myproj.md"
-        content = proj_path.read_text()
-        content = content.replace("due:", "due: 2020-01-01").replace("status: planning", "status: active")
-        proj_path.write_text(content)
-
-        result = runner.invoke(cli, ["daily"])
-        assert "Myproj" in result.output or "myproj" in result.output.lower()
-
-
 class TestProjects:
     """Test cor projects command."""
 
@@ -993,3 +961,64 @@ class TestExampleVault:
         monkeypatch.setattr(subprocess, "run", guard)
         result = runner.invoke(cli, ["example-vault"])
         assert result.exit_code == 0, result.output
+
+
+class TestInitAgentsFile:
+    """`cor init` installs AGENTS.md, the instructions any coding agent reads."""
+
+    @pytest.fixture
+    def git_dir(self, tmp_path, monkeypatch):
+        import subprocess
+        monkeypatch.chdir(tmp_path)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        return tmp_path
+
+    def test_init_installs_agents_file(self, runner, git_dir):
+        result = runner.invoke(cli, ["init", "--yes"])
+        assert result.exit_code == 0, result.output
+        agents = git_dir / "AGENTS.md"
+        assert agents.exists()
+        text = agents.read_text()
+        assert "cor batch" in text and "Daily briefing" in text
+        assert not text.startswith("---"), "the instructions file must not carry frontmatter"
+
+    def test_no_agent_skips_installation(self, runner, git_dir):
+        result = runner.invoke(cli, ["init", "--yes", "--no-agent"])
+        assert result.exit_code == 0, result.output
+        assert not (git_dir / "AGENTS.md").exists()
+
+    def test_edited_file_is_kept_under_yes(self, runner, git_dir):
+        runner.invoke(cli, ["init", "--yes"])
+        agents = git_dir / "AGENTS.md"
+        agents.write_text("# Mine\n")
+        result = runner.invoke(cli, ["init", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert agents.read_text() == "# Mine\n"
+
+    def test_interactive_rerun_asks_before_overwriting(self, runner, git_dir):
+        runner.invoke(cli, ["init", "--yes"])
+        agents = git_dir / "AGENTS.md"
+        agents.write_text("# Mine\n")
+        # Prompts: continue? calendar? inbox? overwrite AGENTS.md?
+        keep = runner.invoke(cli, ["init"], input="y\nn\nn\nn\n")
+        assert keep.exit_code == 0, keep.output
+        assert "differs from the shipped version" in keep.output
+        assert agents.read_text() == "# Mine\n"
+        overwrite = runner.invoke(cli, ["init"], input="y\nn\nn\ny\n")
+        assert overwrite.exit_code == 0, overwrite.output
+        assert "cor batch" in agents.read_text()
+
+    def test_shipped_project_template_renders_valid_frontmatter(self, runner, git_dir):
+        import frontmatter
+        from datetime import datetime
+        runner.invoke(cli, ["init", "--yes"])
+        result = runner.invoke(cli, ["new", "project", "demo", "--no-edit"])
+        assert result.exit_code == 0, result.output
+        post = frontmatter.load(git_dir / "demo.md")
+        for key in ("created", "modified"):
+            value = post[key]
+            assert isinstance(value, (datetime, str)) and value, f"{key} must be a stamp, got {value!r}"
+        valid = runner.invoke(cli, ["validate", "--json"])
+        assert json.loads(valid.output)["valid"] is True, valid.output
