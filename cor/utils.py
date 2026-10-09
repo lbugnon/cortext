@@ -300,6 +300,36 @@ def title_to_stem(title: str) -> str:
     return re.sub(r'[^\w-]', '', slug).strip("_-")
 
 
+# A template line holding only the parent breadcrumb: either the current
+# `{parent_link}` placeholder or the legacy hardcoded form that vaults created
+# before `{parent_link}` existed still carry in their templates/ directory.
+TEMPLATE_BACKLINK_LINE = re.compile(
+    r"^[ \t]*(?:\{parent_link\}|\[<[^\]]*\]\(\{parent\}\.md\))[ \t]*$"
+)
+
+
+def drop_breadcrumb_line(template: str) -> str:
+    """Remove the parent breadcrumb line from a template, plus its blank gap.
+
+    Root entries (``paper_3``, ``ideas``) have no parent, so the breadcrumb has
+    nothing to point at. Legacy templates that hardcode the link render a
+    dangling ``[< ](.md)``, and even the current templates leave a stray blank
+    line where ``{parent_link}`` expanded to nothing. Dropping the whole line
+    at template level keeps the rest of the layout untouched.
+    """
+    lines = template.split("\n")
+    for i, line in enumerate(lines):
+        if TEMPLATE_BACKLINK_LINE.match(line):
+            end = i + 1
+            # Swallow the blank line that followed the breadcrumb, so the
+            # heading is not left with a double gap under it.
+            if end < len(lines) and not lines[end].strip():
+                end += 1
+            del lines[i:end]
+            break
+    return "\n".join(lines)
+
+
 def render_template(
     template: str, name: str, parent: str | None = None, parent_title: str | None = None,
     message: str | None = None
@@ -311,6 +341,8 @@ def render_template(
     parent_link = ""
     if parent and parent_title:
         parent_link = f"[< {parent_title}]({parent}.md)"
+    else:
+        template = drop_breadcrumb_line(template)
     
     content = template.format(
         date=now,
