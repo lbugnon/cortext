@@ -1,18 +1,5 @@
----
-modified: 2026-07-31 23:54
----
+# Plain text knowledge management for the terminal
 
-<div align="center">
-
-<img src="logo.png" alt="Cor Logo" width="120" height="120">
-
-
-**Plain text knowledge management for the terminal**
-
-[![PyPI](https://img.shields.io/pypi/v/cor-text)](https://pypi.org/project/cor-text/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-</div>
 
 Track projects, tasks, ideas, and progress using markdown files and git.
 
@@ -132,6 +119,7 @@ cor sync
 | `project.group.smaller_group.task.md` | Task | Deeply nested task (supports any depth) |
 | `project.note.md` | Note | Reference/thinking, not actionable |
 | `backlog.md` | Backlog | Unsorted inbox for capture |
+| `README.md`, `AGENTS.md`, … | Document | All-uppercase root files are documents for people and tools, not entries; sync, search and transactions ignore them |
 
 ## Metadata Reference
 
@@ -184,7 +172,7 @@ tags: [coding, urgent]
 
 | Command | Description |
 |---------|-------------|
-| `cor init` | Initialize vault (creates structure, initializes git, installs hooks) |
+| `cor init` | Initialize vault (structure, git, hooks, `AGENTS.md` for coding agents; `--no-agent` to skip) |
 | `cor example-vault` | Create a sample vault to explore features |
 | `cor new <type> <name>` | Create file from template (project, task, note) |
 | `cor expand <task>` | Expand task checklist into individual subtasks |
@@ -197,8 +185,8 @@ tags: [coding, urgent]
 | `cor link <query>` | Print a `[Title](stem.md)` markdown link (for piping) |
 | `cor depend <add\|remove\|list> …` | Manage soft task/project dependencies |
 | `cor rel <add\|rm\|show> …` | Manage relations: `continues`, `related`, `requires` |
-| `cor sync` | Commit all changes, pull, and push to remote (`--no-pull`, `--no-push`) |
-| `cor daily [tag]` | Show today's tasks; optional `tag` filters by project/task/project tags |
+| `cor sync` | Commit, pull, and push every registered vault (`--vault NAME`, `--no-pull`, `--no-push`) |
+| `cor daily [tag]` | Forecast (overdue / today / upcoming) plus ranked next actions; `--days`, `--explain`, `--json` |
 | `cor weekly` | Show this week's summary |
 | `cor projects` | List active projects with status and last activity (from children) |
 | `cor status` | Vault statistics and overview |
@@ -216,7 +204,7 @@ tags: [coding, urgent]
 | `cor calendar <auth\|sync\|status\|logout>` | Google Calendar integration (needs `cor-text[calendar]`) |
 | `cor maintenance sync` | Manually run archive/status sync |
 | `cor maintenance hooks <install\|uninstall>` | Install/remove the pre-commit hook and completion |
-| `cor search <query>` | Full-text content search (supports filters: `status:`, `#tag`, `project:`) |
+| `cor search <query>` | Full-text or inventory search; filters `status:`, `#tag`, `project:`, `type:`, `priority:`, `due:`; `--json` |
 | `cor get <stem> --json` | Read one exact entry with its content revision |
 | `cor update <stem> --section <heading> --json <text>` | Replace or append one Markdown section |
 | `cor batch [manifest.json]` | Apply structured operations as one atomic transaction |
@@ -224,6 +212,55 @@ tags: [coding, urgent]
 | `cor history --json` | List compact local transaction records |
 | `cor undo <transaction-id>` | Undo the latest unchanged committed transaction |
 | `cor recover [transaction-id]` | Restore the before-state of an interrupted transaction |
+
+### Daily View
+
+`cor daily` answers two questions: what is due, and what to do now.
+
+```
+Mon 13 Sep    [Focusing on: research]
+
+OVERDUE
+   2d  [ ] Measure validation F1                 high   blocks 1  research
+TODAY
+       [ ] Write method section 15:00                             research.paper
+UPCOMING
+  Fri  [ ] Select figures                        medium           research.paper
+  Fri   ◆  Research                                               (project due)
+
+NEXT                                   why
+   1. Measure validation F1            overdue 2d · high · unblocks Write up
+   2. Write method section             due today 15:00
+   3. Select figures                   due 4d · medium
+  ... 3 more (cor daily -a)
+
+FOLLOW-UP
+  waiting  Reviewer feedback        10d, no due                    research
+  blocked  Write up                 needs research.measure         research
+  stuck    Side quest               active project, no next action
+  inbox    4 unprocessed items                                     backlog.md
+```
+
+- **OVERDUE / TODAY / UPCOMING** list every open task or project with a due
+  date, by day. `--days N` sets the horizon (default 7). A time is shown when
+  the due date has one.
+- **NEXT** ranks actionable leaf tasks (status `todo` or `active`, requirements
+  met, project neither paused nor done) by an additive urgency score. The `why`
+  column lists what contributed: due proximity, priority, `active`, how many
+  tasks it unblocks, and `untouched Nd` for active tasks idle for more than a
+  week. `--explain` prints the score and its components; `--limit N` and `-a`
+  control how many rows you see.
+- **FOLLOW-UP** shows waiting tasks with their age, blocked tasks with what they
+  need, active projects with no next action, and the unprocessed inbox count.
+
+A tag argument narrows every section (`cor daily research`); without one, the
+focused project (`cor focus`) applies. `-v` adds each task's description.
+Urgency weights can be overridden in the `agenda:` block of the config file.
+
+`cor daily --json` prints the whole result for automation. Every item carries
+`stem`, `status`, `priority`, `due`, `days_until_due`, `blocks`, `blocked_by`,
+`urgency`, `reasons` and `urgency_components`; the top level carries the vault
+`revision` to pass to `cor batch --expect-revision`.
 
 ### Agent and Automation Interface
 
@@ -267,6 +304,40 @@ writes if a transaction was interrupted after its durable journal was created;
 inspect `cor history --json`, then run `cor recover [transaction-id]` to restore
 the saved before-state. Transaction history is local under `.git/cortex/` when
 the vault is a Git repository.
+
+`cor daily --json` is the briefing input: what is due, the ranked next actions
+with their reasons, the follow-ups, and the vault `revision`.
+
+#### Working with a coding agent
+
+`cor init` installs `AGENTS.md` at the vault root: instructions that any coding
+agent picks up when run from the vault directory. They tell the agent to read
+through `cor daily --json`, `cor search --json` and `cor get --json`, to write
+only through `cor batch` (dry-run first, then apply with a `request_id` and
+`--expect-revision`), and they describe a daily briefing procedure you trigger
+by asking for "the daily briefing". Edit the file to fit your workflow; `cor
+init` never overwrites an edited copy without asking. Skip the installation
+with `cor init --no-agent`. If your agent expects a differently named
+instructions file, create one locally with a single line that includes
+`AGENTS.md`.
+
+`AGENTS.md` is only loaded when the agent runs from the vault. To reach the
+vault from anywhere else, put the same pointer in a user-level instruction file
+or skill: `cor` resolves its vault from `~/.config/cor/config.yaml`, so no extra
+plumbing is needed - the agent only has to know the vault exists.
+
+`cor/assets/claude_skill.md` is a ready-made Claude Code skill for that. It
+carries the read and write discipline and the content rules, and leaves the
+mechanics to the vault's `AGENTS.md`. Install it by hand, as a copy or a symlink:
+
+```sh
+mkdir -p ~/.claude/skills/cor
+ln -s "$(python -c 'import cor, pathlib; print(pathlib.Path(cor.__file__).parent)')/assets/claude_skill.md" \
+      ~/.claude/skills/cor/SKILL.md
+```
+
+Claude then picks the vault up from any directory - asking for the daily
+briefing or capturing a task no longer depends on where the session started.
 
 ### Bulk Operations
 
@@ -312,15 +383,32 @@ cor search "training" -n 50
 
 # Compact output (no context lines)
 cor search "TODO" --no-context
+
+# Filter by priority and due date (an inventory when there is no search text)
+cor search "priority:high"
+cor search "due:overdue"                 # past due and still open
+cor search "due:week status:todo"        # due within the next 7 days
+cor search "due:none type:task"          # tasks without a due date
+cor search "due:<=2026-09-30"            # also >=YYYY-MM-DD and exact dates
+cor search --due week --priority high    # option form of the same filters
+
+# Machine-readable records: stem, title, type, status, archived, priority, due,
+# due_has_time, days_until_due, created, modified, tags, requires, parent, project
+cor search "due:week" --json
 ```
 
 ### Sync & Conflict Resolution
 
+`cor sync` runs commit → pull → push in every vault registered with `cor vault add`, wherever you run it from. A vault that fails (merge conflict, no remote) is reported and the others still sync. A vault found from cwd but not registered is skipped with a warning.
+
 When working across multiple machines, sync conflicts can occur:
 
 ```bash
-# Normal sync (commit → pull → push)
+# Normal sync of all registered vaults (commit → pull → push)
 cor sync
+
+# Sync only one vault
+cor sync --vault work
 
 # Skip pull (commit + push only)
 cor sync --no-pull
@@ -473,6 +561,9 @@ vault: /home/user/notes/work   # Legacy key, mirrors the default
 verbosity: 1                   # 0=silent, 1=normal, 2=verbose, 3=debug
 timezone: UTC                  # For calendar event times
 remote_inbox: 123456:ABC...    # Telegram bot token (optional)
+agenda:                        # Optional urgency weight overrides for cor daily
+  priority_high: 4
+  untouched_days: 7
 vault_state:                   # Per-vault state, so focus doesn't leak
   work:
     focus: myproject
@@ -496,7 +587,7 @@ cor vault default <name>    # Set the fallback vault
 
 ### Mobile Inbox via Telegram
 
-Capture notes from your phone by sending messages to a Telegram bot. Messages are automatically pulled into your backlog during `cor sync`.
+Capture notes from your phone by sending messages to a Telegram bot. Messages are automatically pulled into the default vault's backlog during `cor sync`.
 
 #### Setup (2 minutes)
 
@@ -528,7 +619,7 @@ Capture notes from your phone by sending messages to a Telegram bot. Messages ar
 
 ### Google Calendar Integration
 
-Sync task due dates to Google Calendar. Events are created automatically when you run `cor sync` (if authenticated).
+Sync task due dates to Google Calendar. Events are created automatically from the default vault when you run `cor sync` (if authenticated).
 
 2. **Authenticate**:
    ```bash
@@ -587,8 +678,8 @@ closed, don't resurrect it from the archive — that erases the `done` state and
 its closing Summary. Create a new project linked to the old one:
 
 ```bash
-cor new project screening-v2 -c screening-v1     # at creation time
-cor rel add screening-v2 screening-v1 --as continues   # or later
+cor new project pipeline-v2 -c pipeline-v1     # at creation time
+cor rel add pipeline-v2 pipeline-v1 --as continues   # or later
 ```
 
 The predecessor stays archived and stays `done`. Its **Goal** is copied into a
@@ -597,11 +688,11 @@ The predecessor stays archived and stays `done`. Its **Goal** is copied into a
 ```markdown
 ## Continues
 
-[< Continues: Screening V1](archive/screening-v1.md)
+[< Continues: Pipeline V1](archive/pipeline-v1.md)
 
-**Goal (Screening V1):**
+**Goal (Pipeline V1):**
 
-Ship the first screening pipeline.
+Ship the first analysis pipeline.
 ```
 
 A project can continue several predecessors (`-c old-a -c old-b`), and one
@@ -782,6 +873,7 @@ your-vault/                 # Your notes directory
 │   └── hooks/
 │       └── pre-commit      # Auto-maintenance hook
 ├── backlog.md              # Unsorted inbox for capture (vault marker)
+├── AGENTS.md               # Instructions for coding agents (skip with --no-agent)
 ├── archive/                # Completed/archived items
 │   ├── old-project.md
 │   ├── project.old-task.md
@@ -814,7 +906,8 @@ cortex_pkm/                 # Repository root
 │   │   ├── maintenance.py  # sync, maintenance, hooks
 │   │   └── search_cmd.py   # search
 │   ├── commands/           # Additional command modules
-│   │   ├── status.py       # daily, weekly, projects, tree, status
+│   │   ├── daily.py        # daily (forecast + ranked next actions)
+│   │   ├── status.py       # weekly, projects, tree, status
 │   │   ├── refactor.py     # rename/move/group
 │   │   ├── process.py      # backlog processing
 │   │   ├── refs.py         # bibliography (cor ref)
@@ -825,6 +918,7 @@ cortex_pkm/                 # Repository root
 │   ├── core/               # Core business logic
 │   │   ├── files.py        # FileIterator / NoteFileManager
 │   │   ├── notes.py        # note parsing
+│   │   ├── agenda.py       # forecast + urgency ranking behind cor daily
 │   │   ├── links.py        # link parsing & rewriting
 │   │   ├── archive.py      # ArchiveManager
 │   │   └── refs.py         # reference metadata
@@ -841,6 +935,7 @@ cortex_pkm/                 # Repository root
 │   └── assets/             # Built-in templates, schema, nvim plugin
 │       ├── schema.yaml
 │       ├── project.md / task.md / note.md / backlog.md / ref.md
+│       ├── vault_agents.md # Installed into vaults as AGENTS.md
 │       └── cortex.lua      # Neovim/LazyVim plugin
 ├── tests/                  # Test suite
 ├── docs/                   # Additional docs (nvim.md)

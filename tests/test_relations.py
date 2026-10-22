@@ -64,7 +64,7 @@ def continuation_vault(temp_vault):
     """Two archived predecessors with real Goal/Summary text, plus a successor."""
     archive_project(
         temp_vault, "old-a",
-        goal="Ship the first screening pipeline.",
+        goal="Ship the first analysis pipeline.",
         summary="Finished in Q2; old-a hit its targets.",
     )
     archive_project(
@@ -92,7 +92,7 @@ class TestContinues:
 
         body = (continuation_vault / "new-thing.md").read_text()
         assert "## Continues" in body
-        assert "Ship the first screening pipeline." in body
+        assert "Ship the first analysis pipeline." in body
 
     def test_does_not_copy_summary(self, runner, continuation_vault):
         """Only COPIED_SECTIONS travels; the Summary is history, and a link away."""
@@ -156,7 +156,7 @@ class TestContinues:
         assert fm(path)["continues"] == ["old-a"]
         assert body.count("## Continues") == 1
         assert body.count("[< Continues:") == 1
-        assert body.count("Ship the first screening pipeline.") == 1
+        assert body.count("Ship the first analysis pipeline.") == 1
 
     def test_second_predecessor_appends(self, runner, continuation_vault):
         """Adding a predecessor later extends the existing section."""
@@ -330,7 +330,7 @@ class TestNewProjectContinuesFlag:
         assert fm(path)["continues"] == ["old-a", "old-b"]
         body = path.read_text()
         assert "](archive/old-a.md)" in body
-        assert "Ship the first screening pipeline." in body
+        assert "Ship the first analysis pipeline." in body
 
     def test_flag_rejected_for_tasks(self, runner, continuation_vault):
         result = runner.invoke(

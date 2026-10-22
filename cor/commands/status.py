@@ -6,7 +6,7 @@ import click
 
 from ..exceptions import NotFoundError, ValidationError
 from ..completions import complete_project, complete_existing_name
-from ..core.notes import find_notes
+from ..core.notes import find_notes, matches_tag, build_project_tags
 from ..schema import STATUS_SYMBOLS
 from ..utils import get_notes_dir, format_time_ago, format_due_date, require_init, format_title, get_parent_name
 from ..config import get_focused_project
@@ -408,260 +408,6 @@ def _build_subtree(
     return True
 
 
-def _group_by_project(tasks: list) -> dict:
-    """Group tasks by their parent project."""
-    from collections import OrderedDict
-    groups = OrderedDict()
-    for task in tasks:
-        project = task.parent_project or task.path.stem
-        groups.setdefault(project, []).append(task)
-    return groups
-
-
-def _print_section(title: str, tasks: list, color: str, formatter, limit: int, verbose: bool = False) -> bool:
-    """Print section with tasks grouped by project. Returns True if printed."""
-    if not tasks:
-        return False
-
-    heading = click.style(f"\n{title}", fg=color, bold=True)
-    click.echo(heading)
-    shown = 0
-    groups = _group_by_project(tasks)
-
-    for project, project_tasks in groups.items():
-        project_display = format_title(project)
-        if limit and shown >= limit:
-            break
-        project_line = f"  {project_display}"
-        click.echo(project_line)
-        for task in project_tasks:
-            if limit and shown >= limit:
-                break
-            symbol = STATUS_SYMBOLS.get(task.status, "[ ]")
-            task_color = TASK_COLORS.get(task.status, "white")
-            info = formatter(task)
-            styled_symbol = click.style(symbol, fg=task_color)
-            line = f"  └── {styled_symbol} {task.title}{info}"
-            click.echo(line)
-
-            # Show description if verbose
-            if verbose:
-                desc = _extract_description(task)
-                if desc:
-                    desc_line = f"      {click.style(desc, dim=True)}"
-                    click.echo(desc_line)
-
-            shown += 1
-
-    remaining = len(tasks) - shown
-    if remaining > 0:
-        click.echo(click.style(f"  ... and {remaining} more", dim=True))
-    return True
-
-
-
-def _matches_tag(note, tag, project_tags) -> bool:
-    """Return True if note matches provided tag filter.
-
-    Tag matches if:
-    - tag is None (no filtering)
-    - tag equals parent project name
-    - tag exists in note.tags
-    - tag exists in parent project's tags (propagated)
-    """
-    if not tag:
-        return True
-    parent = note.parent_project
-    if parent and tag == parent:
-        return True
-    if tag in (note.tags or []):
-        return True
-    if parent and tag in project_tags.get(parent, set()):
-        return True
-    return False
-
-@click.command(short_help="Prioritized daily view of tasks")
-@click.option("--limit", "-l", default=3, help="Max items per section (default: 3)")
-@click.option("--all", "-a", "show_all", is_flag=True, help="Show all items (no limit)")
-@click.option("--verbose", "-v", is_flag=True, help="Show task descriptions")
-@click.argument("tag", required=False, shell_complete=complete_project)
-@require_init(write=False)
-def daily(limit: int, show_all: bool, verbose: bool, tag: str | None):
-    """Show what needs attention today.
-
-    \b
-    Prioritized daily view:
-    - Overdue items (fix first)
-    - Stale waiting items (follow up)
-    - Due today
-    - In progress (continue)
-    - High priority ready
-    - Suggested next (from active projects)
-    
-    Use -v/--verbose to show task descriptions.
-
-    If a tag is provided (e.g., `cor daily foundation_model`), only tasks
-    matching the tag are shown. A task matches when:
-    - The task's parent project name equals the tag, or
-    - The task has the tag in its metadata, or
-    - Its parent project has the tag (project tags propagate to children).
-    
-    If a project is focused (via `cor focus`), automatically filters to that project.
-    """
-    notes_dir = get_notes_dir()
-
-    # Apply focus if set and no explicit tag provided
-    focused = get_focused_project()
-    if tag is None and focused:
-        tag = focused
-
-    notes = find_notes(notes_dir)
-    now = datetime.now()
-    today = now.date()
-
-    if show_all:
-        limit = 0  # 0 means no limit
-
-    # Build set of active project names
-    active_projects = {
-        n.path.stem for n in notes if n.note_type == "project" and n.status == "active"
-    }
-
-    # Build project -> tags mapping for propagation
-    project_tags: dict[str, set[str]] = {
-        n.path.stem: set(n.tags or []) for n in notes if n.note_type == "project"
-    }
-
-    # Show focus indicator if filtering by focused project
-    if focused and tag == focused:
-        click.echo(click.style(f"[Focusing on: {focused}]\n", fg="cyan", bold=True))
-
-    # Pre-filter tasks once (respects tag propagation)
-    tasks = [n for n in notes if n.note_type == "task" and _matches_tag(n, tag, project_tags)]
-
-    # Deadline-driven sections (Overdue / Due Today) also surface projects with
-    # a due date; other sections stay task-only.
-    deadline_items = [
-        n for n in notes
-        if n.note_type in ("task", "project") and _matches_tag(n, tag, project_tags)
-    ]
-
-    # Track shown items to avoid duplicates
-    shown_paths = set()
-    sections_printed = False
-
-    # Helper to format overdue time
-    def format_overdue(n):
-        days = n.days_overdue
-        if days == 0:
-            return " (due today)"
-        elif days == 1:
-            return " (1d overdue)"
-        else:
-            return f" ({days}d overdue)"
-
-    # 1. Overdue (tasks and projects, sorted by due date)
-    overdue = [n for n in deadline_items if n.is_overdue]
-    overdue.sort(key=lambda n: n.due)
-    if _print_section(
-        "Overdue",
-        overdue,
-        "red",
-        format_overdue,
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-        shown_paths.update(n.path for n in overdue[:limit or len(overdue)])
-
-    # 2. Waiting stale (waiting status + stale)
-    waiting_stale = [n for n in tasks if n.status == "waiting" and n.is_stale and n.path not in shown_paths]
-    waiting_stale.sort(key=lambda n: n.modified or datetime.min)
-    if _print_section(
-        "Waiting (stale)",
-        waiting_stale,
-        "yellow",
-        lambda n: f" ({format_time_ago(n.modified)} since update)" if n.modified else "",
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-        shown_paths.update(n.path for n in waiting_stale[:limit or len(waiting_stale)])
-
-    # 3. Due today
-    due_today = [
-        n
-        for n in deadline_items
-        if n.due and n.due == today and n.status not in ("done", "dropped") and n.path not in shown_paths
-    ]
-    priority_order = {"high": 0, "medium": 1, "low": 2}
-    due_today.sort(key=lambda n: priority_order.get(n.priority, 3))
-    if _print_section(
-        "Due Today",
-        due_today,
-        "cyan",
-        lambda n: f" [{n.priority}]" if n.priority else "",
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-        shown_paths.update(n.path for n in due_today[:limit or len(due_today)])
-
-    # 4. In Progress (active tasks)
-    in_progress = [n for n in tasks if n.status == "active" and n.path not in shown_paths]
-    in_progress.sort(key=lambda n: n.modified or datetime.min)
-    if _print_section(
-        "In Progress",
-        in_progress,
-        "blue",
-        lambda n: f" ({format_time_ago(n.modified)})" if n.modified else "",
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-        shown_paths.update(n.path for n in in_progress[:limit or len(in_progress)])
-
-    # 5. High Priority Ready (high priority + todo)
-    high_priority = [
-        n
-        for n in tasks
-        if n.priority == "high" and n.status == "todo" and n.path not in shown_paths
-    ]
-    high_priority.sort(key=lambda n: n.created or datetime.min)
-    if _print_section(
-        "High Priority",
-        high_priority,
-        "magenta",
-        lambda n: "",
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-        shown_paths.update(n.path for n in high_priority[:limit or len(high_priority)])
-
-    # 6. Suggested Next (todo tasks in active projects)
-    suggested = [
-        n
-        for n in tasks
-        if n.status == "todo" and n.path not in shown_paths and n.parent_project in active_projects
-    ]
-    suggested.sort(key=lambda n: n.modified or datetime.min)
-    if _print_section(
-        "Suggested Next",
-        suggested,
-        "white",
-        lambda n: "",
-        limit,
-        verbose=verbose,
-    ):
-        sections_printed = True
-
-    if not sections_printed:
-        click.echo(click.style("\nAll clear! Nothing urgent for today.", fg="green"))
-
-    click.echo()
-
-
 def _get_project_last_activity(project_name: str, all_notes: list) -> datetime | None:
     """Get the most recent modification date from a project's tasks/notes."""
     most_recent = None
@@ -819,9 +565,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
     note_counts = _build_note_counts(notes)
 
     # Build project -> tags mapping for propagation
-    project_tags: dict[str, set[str]] = {
-        n.path.stem: set(n.tags or []) for n in notes if n.note_type == "project"
-    }
+    project_tags = build_project_tags(notes)
 
     # Filter by tags if specified
     project_filter = {tag} if tag else None
@@ -838,7 +582,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
             continue
 
         # Skip tasks that don't match the tag filter
-        if not _matches_tag(n, tag, project_tags):
+        if not matches_tag(n, tag, project_tags):
             continue
 
         project = n.parent_project or n.path.stem
@@ -884,7 +628,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
             for task_stem in completed_this_week:
                 if task_stem.startswith(project_name + ".") or task_stem == project_name:
                     task = all_tasks.get(task_stem)
-                    if task and _matches_tag(task, tag, project_tags):
+                    if task and matches_tag(task, tag, project_tags):
                         filtered_projects.add(project_name)
                         break
         projects_with_completed = filtered_projects
@@ -911,7 +655,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
     # === Project-specific view: show full tree (except TODO) ===
     if project_filter:
         # Find all tasks that match the tag and their parent projects
-        matching_tasks = [t for t in all_tasks.values() if _matches_tag(t, tag, project_tags)]
+        matching_tasks = [t for t in all_tasks.values() if matches_tag(t, tag, project_tags)]
         matching_projects = set()
         for t in matching_tasks:
             if t.parent_project:

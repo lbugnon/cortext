@@ -14,7 +14,10 @@ parent: {parent}
 {parent_link}
 
 ## Description
+<!-- The question or decision in one or two sentences, and why now.
+     No code, config, paths or commands - name the repo or script instead. -->
 
 
 ## Solution
-
+<!-- What came out: the number, the verdict, the choice made.
+     Required before done or dropped. -->

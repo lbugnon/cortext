@@ -417,7 +417,7 @@ default_timezone = "UTC"
 def get_timezone() -> str:
     """Get the timezone from config (default: UTC).
     
-    Returns timezone string like 'America/Argentina/Buenos_Aires' or 'UTC'.
+    Returns timezone string like 'Europe/Berlin' or 'UTC'.
     """
     config = load_config()
     return config.get("timezone", default_timezone)
@@ -427,7 +427,7 @@ def set_timezone(timezone: str) -> None:
     """Set the timezone in config.
     
     Args:
-        timezone: Timezone string like 'America/Argentina/Buenos_Aires'
+        timezone: Timezone string like 'Europe/Berlin'
     """
     config = load_config()
     config["timezone"] = timezone

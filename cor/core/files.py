@@ -31,6 +31,18 @@ def save_note(filepath: str | Path, post: frontmatter.Post) -> None:
     """Write a frontmatter Post back to disk, preserving key order."""
     atomic_write_post(filepath, post)
 
+
+def is_repo_doc(path: str | Path) -> bool:
+    """True for root-level documents that are not notes (README.md, AGENTS.md, ...).
+
+    Vault stems are always lowercased, so an all-uppercase ``.md`` name can only
+    be a repository document: a readme, a changelog, instructions for tools.
+    Note discovery, sync, search and transactions all skip them, which keeps
+    the maintenance hook from injecting frontmatter into files that have none.
+    """
+    candidate = Path(path)
+    return candidate.suffix == ".md" and candidate.stem.isupper()
+
 def _is_top_level_note(path: Path) -> bool:
     """Return True if ``path`` is a note file (``type: note``) at the top level.
 
@@ -72,7 +84,7 @@ class FileIterator:
         """
         # Active notes
         for path in self.notes_dir.glob("*.md"):
-            if path.name.startswith("."):
+            if path.name.startswith(".") or is_repo_doc(path):
                 continue
             if exclude_special and path.stem in self.EXCLUDED_STEMS:
                 continue

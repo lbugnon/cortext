@@ -1,6 +1,7 @@
 """Command modules for Cor CLI."""
 
-from .status import daily, projects, weekly, tree, status
+from .status import projects, weekly, tree, status
+from .daily import daily
 from .refactor import rename, group
 from .inbox import inbox
 

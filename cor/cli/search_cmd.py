@@ -5,7 +5,8 @@ import json
 import click
 
 from ..ui.theme import rule
-from ..search.content import list_notes
+from ..search.content import list_notes, note_record, validate_filters
+from ..core.files import is_repo_doc
 
 from . import cli
 from cor.search import search_content, parse_search_query, filter_matches, SearchMatch
@@ -94,18 +95,7 @@ def _list_notes_by_filters(filters: dict, archived: bool, limit: int, as_json: b
     results = list_notes(notes_dir, filters, include_archived=archived)
 
     if as_json:
-        payload = [
-            {
-                "stem": note.path.stem,
-                "type": note.note_type,
-                "status": note.status,
-                "archived": "archive" in note.path.parts,
-                "tags": note.tags or [],
-                "parent": note.path.stem.rsplit(".", 1)[0]
-                if "." in note.path.stem else None,
-            }
-            for note in results[:limit]
-        ]
+        payload = [note_record(note) for note in results[:limit]]
         click.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         return
 
@@ -143,6 +133,10 @@ def _list_notes_by_filters(filters: dict, archived: bool, limit: int, as_json: b
 @click.option("--project", help="Filter by exact root project stem.")
 @click.option("--status", help="Filter by exact status.")
 @click.option("--type", "note_type", type=click.Choice(["project", "task", "note"]))
+@click.option("--priority", type=click.Choice(["low", "medium", "high", "none"]),
+              help="Filter by priority (none = unset).")
+@click.option("--due", "due_filter",
+              help="Filter by due: overdue, today, week, none, YYYY-MM-DD, <=YYYY-MM-DD, >=YYYY-MM-DD.")
 @click.option("--all", "list_all", is_flag=True, help="List entries without search text.")
 @click.option("--json", "as_json", is_flag=True, help="Emit compact JSON.")
 @click.argument("query", required=False, default="")
@@ -154,6 +148,8 @@ def search(
     project: str | None,
     status: str | None,
     note_type: str | None,
+    priority: str | None,
+    due_filter: str | None,
     list_all: bool,
     as_json: bool,
     query: str,
@@ -167,6 +163,9 @@ def search(
       status:VALUE     Filter by status (e.g., status:active)
       #TAG             Filter by tag (e.g., #urgent)
       project:NAME     Filter by project (e.g., project:foundation_model)
+      type:VALUE       Filter by type (project, task, note)
+      priority:VALUE   Filter by priority (low, medium, high, none)
+      due:SPEC         overdue, today, week, none, YYYY-MM-DD, <=YYYY-MM-DD, >=YYYY-MM-DD
 
     \b
     Examples:
@@ -182,8 +181,10 @@ def search(
     filters.update({
         key: value for key, value in {
             "project": project, "status": status, "type": note_type,
+            "priority": priority, "due": due_filter,
         }.items() if value is not None
     })
+    validate_filters(filters)
 
     if not text_query and not filters and not list_all:
         click.echo("Error: Empty query. Provide search text or filters.", err=True)
@@ -249,17 +250,25 @@ def search(
 
         payload = []
         for match in matches:
-            note = parse_metadata(match.file)
-            payload.append({
+            if is_repo_doc(match.file):
+                continue
+            try:
+                note = parse_metadata(match.file)
+            except Exception:
+                note = None
+            record = note_record(note) if note else {
                 "stem": match.file.stem,
-                "type": note.note_type if note else None,
-                "status": note.status if note else None,
+                "type": None,
+                "status": None,
                 "archived": "archive" in match.file.parts,
+            }
+            record.update({
                 "line": match.line,
                 "text": match.content,
                 "before": match.context_before,
                 "after": match.context_after,
             })
+            payload.append(record)
         click.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         return
 

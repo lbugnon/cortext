@@ -6,49 +6,105 @@ from pathlib import Path
 
 import click
 
-from ..exceptions import CorError, NotInitializedError, ExternalServiceError
+from ..config import (
+    _known_vaults_hint,
+    get_default_vault,
+    get_vaults,
+    is_vault_initialized,
+    resolve_vault,
+)
+from ..exceptions import ConfigError, CorError, NotInitializedError, ExternalServiceError
 from . import cli, _install_pre_commit_hook, _install_shell_completion, _uninstall_pre_commit_hook
 from ..completions import complete_existing_name
 from ..utils import get_notes_dir, require_init, log_info
 from ..sync import MaintenanceRunner
+from ..core.files import is_repo_doc
 
 
 @cli.command()
 @click.option("--message", "-m", type=str, help="Custom commit message")
 @click.option("--no-push", is_flag=True, help="Commit only, don't push")
 @click.option("--no-pull", is_flag=True, help="Skip pull before push")
+@click.option("--vault", "only_vault", type=str, help="Sync only this registered vault")
 @click.option("--full-sync", "full_sync", is_flag=True, help="Sync all Telegram messages including previously read ones")
 @click.option("--delete-after-inbox", "delete_after_inbox", is_flag=True, help="Delete Telegram messages after syncing instead of just acknowledging them")
-@require_init
-def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, delete_after_inbox: bool):
-    """Sync vault with git remote.
+def sync(message: str | None, no_push: bool, no_pull: bool, only_vault: str | None,
+         full_sync: bool, delete_after_inbox: bool):
+    """Sync every registered vault with its git remote.
 
-    Workflow: commit local changes → pull → push
+    Workflow per vault: commit local changes → pull → push
     Auto-generates commit message based on changes.
+
+    The Telegram inbox and Google Calendar are pulled into and mirrored from
+    the default vault only (see 'cor vault default').
 
     \b
     Examples:
-      cor sync                        # Full sync
+      cor sync                        # Sync all registered vaults
+      cor sync --vault work           # Sync one vault
       cor sync -m "Add new tasks"     # With custom message
       cor sync --no-push              # Local commit only
     """
-    notes_dir = get_notes_dir()
+    vaults = get_vaults()
+    if not vaults:
+        raise ConfigError("No vaults registered. Run 'cor vault add <name> <path>'.")
+    if only_vault is not None:
+        if only_vault not in vaults:
+            raise ConfigError(f"No vault named '{only_vault}'. Known: {_known_vaults_hint(vaults)}")
+        vaults = {only_vault: vaults[only_vault]}
+    else:
+        _warn_unregistered_active_vault(vaults)
 
-    # Every git call below is pinned with cwd=notes_dir rather than chdir'ing
-    # the process. The old code did `os.chdir(notes_dir)` here and
-    # `os.chdir("..")` at the end, which did not restore the previous
-    # directory - it moved to the vault's parent - and any early raise skipped
-    # it entirely. In the long-lived interactive shell that left the session
-    # sitting outside its own vault while the prompt still claimed otherwise.
-    # Check if we're in a git repo
-    result = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        capture_output=True, text=True, cwd=notes_dir
-    )
-    if result.returncode != 0:
-        raise ExternalServiceError("Not in a git repository.")
+    default_name = get_default_vault()
+    failed = []
+    for name in sorted(vaults):
+        notes_dir = vaults[name].expanduser()
+        click.echo(click.style(f"\n== {name}", bold=True) + f"  {notes_dir}")
+        try:
+            if name == default_name:
+                _sync_integrations(notes_dir, full_sync, delete_after_inbox)
+            _sync_vault_git(notes_dir, message, no_push, no_pull)
+        except CorError as e:
+            # One vault's conflict or missing remote must not stop the others.
+            click.secho(f"Error: {e}", fg="red", err=True)
+            failed.append(name)
 
-    # Step 0: Pull remote inbox (if configured)
+    if failed:
+        raise ExternalServiceError(
+            f"Sync failed for {len(failed)} of {len(vaults)} vault(s): {', '.join(failed)}"
+        )
+
+
+def _warn_unregistered_active_vault(vaults: dict[str, Path]) -> None:
+    """Say so when cwd or COR_VAULT points at a vault `cor sync` will skip.
+
+    Only registered vaults are synced. Picking up whatever vault cwd happens
+    to be in would commit and push a directory the user never listed - the
+    cortex source tree carries a backlog.md, for one.
+    """
+    try:
+        active, _ = resolve_vault()
+    except ConfigError:
+        return
+    active = active.expanduser().resolve()
+    if any(p.expanduser().resolve() == active for p in vaults.values()):
+        return
+    if is_vault_initialized(active):
+        click.echo(click.style(
+            f"Skipping {active}: not a registered vault. "
+            f"Add it with 'cor vault add <name> {active}'.",
+            fg="yellow",
+        ))
+
+
+def _sync_integrations(notes_dir: Path, full_sync: bool, delete_after_inbox: bool) -> None:
+    """Pull the Telegram inbox into, and mirror the calendar from, `notes_dir`.
+
+    Both are single external services shared by every vault, so they are tied
+    to one vault rather than repeated per vault: a second inbox pull finds
+    nothing left, and a second calendar sync would delete the first vault's
+    events.
+    """
     from ..config import get_remote_inbox
     from ..commands.inbox import pull_remote_inbox
 
@@ -69,17 +125,33 @@ def sync(message: str | None, no_push: bool, no_pull: bool, full_sync: bool, del
             # Non-fatal: continue with git sync even if inbox pull fails
             click.echo(click.style(f"Inbox pull failed: {e}", fg="yellow"), err=True)
 
-    # Sync calendar (if authenticated)
-    from ..commands.calendar import _get_credentials
+    from ..commands.calendar import _get_credentials, sync_calendar
     if _get_credentials():
         try:
-            from ..commands.calendar import sync as calendar_sync_cmd
-            # Create a new context for the calendar sync command
-            ctx = click.get_current_context()
-            ctx.invoke(calendar_sync_cmd, calendar="Cor Tasks")
+            sync_calendar(notes_dir, "Cor Tasks")
         except Exception as e:
             # Non-fatal: continue with git sync even if calendar sync fails
             click.echo(click.style(f"Calendar sync failed: {e}", fg="yellow"), err=True)
+
+
+def _sync_vault_git(notes_dir: Path, message: str | None, no_push: bool, no_pull: bool) -> None:
+    """Commit, pull and push one vault."""
+    if not is_vault_initialized(notes_dir):
+        raise NotInitializedError("Not an initialized vault (no backlog.md). Run 'cor init' inside it.")
+
+    # Every git call below is pinned with cwd=notes_dir rather than chdir'ing
+    # the process. The old code did `os.chdir(notes_dir)` here and
+    # `os.chdir("..")` at the end, which did not restore the previous
+    # directory - it moved to the vault's parent - and any early raise skipped
+    # it entirely. In the long-lived interactive shell that left the session
+    # sitting outside its own vault while the prompt still claimed otherwise.
+    # Check if we're in a git repo
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True, text=True, cwd=notes_dir
+    )
+    if result.returncode != 0:
+        raise ExternalServiceError("Not in a git repository.")
 
     # Step 1: Commit local changes first (if any) so the working tree is clean before pull
     result = subprocess.run(
@@ -200,7 +272,7 @@ def maintenance_sync(sync_all: bool):
 
     # Get files to sync
     if sync_all:
-        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog"]
+        files = [str(p) for p in notes_dir.glob("*.md") if p.stem != "backlog" and not is_repo_doc(p)]
         archive_dir = notes_dir / "archive"
         if archive_dir.exists():
             files += [str(p) for p in archive_dir.glob("*.md")]
@@ -350,7 +422,7 @@ def maintenance_check_titles(fix: bool, archived: bool):
     # Collect files to check
     files: list[Path] = [
         p for p in notes_dir.glob("*.md")
-        if p.stem != "backlog"
+        if p.stem != "backlog" and not is_repo_doc(p)
     ]
     if archived and archive_dir.exists():
         files.extend(archive_dir.glob("*.md"))
@@ -414,6 +486,109 @@ def maintenance_check_titles(fix: bool, archived: bool):
 
     click.echo(click.style(f"\nFixed {fixed} file(s).", fg="green"))
 
+
+@maintenance.command("check-outcomes")
+@click.option("--archived", "-a", is_flag=True, help="Include archived notes in the scan")
+@click.option("--json", "as_json", is_flag=True, help="Emit the worklist as JSON")
+@require_init
+def maintenance_check_outcomes(archived: bool, as_json: bool):
+    """Check that finished entries record an outcome.
+
+    Reports two things an entry can be missing:
+
+    \b
+      - a finished entry (done or dropped) whose ## Solution (tasks) or
+        ## Summary (projects) is empty
+      - an entry still holding unfilled <!-- ... --> template comments
+
+    There is no --fix: an outcome cannot be written automatically.
+
+    \b
+    Examples:
+        cor maintenance check-outcomes
+        cor maintenance check-outcomes -a
+        cor maintenance check-outcomes -a --json
+    """
+    import json as json_module
+    import re
+
+    from ..core.content import sections
+    from ..core.files import get_all_note_files, load_note
+
+    notes_dir = get_notes_dir()
+    comment_re = re.compile(r"<!--.*?-->", re.DOTALL)
+    # Markers cor writes itself are not unfilled template prompts.
+    generated_re = re.compile(r"<!--\s*Auto-updated by cor\s*-->")
+
+    missing: list[dict] = []
+    placeholders: list[dict] = []
+
+    for file_path in sorted(get_all_note_files(notes_dir, include_archive=archived)):
+        post = load_note(file_path)
+        if post is None:
+            continue
+
+        note_type = post.get("type")
+        status = post.get("status")
+        body = post.content
+
+        stray = comment_re.findall(generated_re.sub("", body))
+        if stray:
+            placeholders.append({
+                "stem": file_path.stem,
+                "type": note_type,
+                "count": len(stray),
+            })
+
+        if status not in ("done", "dropped"):
+            continue
+        heading = "Summary" if note_type == "project" else "Solution"
+        text = sections(body).get(heading)
+        if text is None or not comment_re.sub("", text).strip():
+            missing.append({
+                "stem": file_path.stem,
+                "type": note_type,
+                "status": status,
+                "section": heading,
+                "present": text is not None,
+            })
+
+    if as_json:
+        click.echo(json_module.dumps({
+            "missing_outcome": missing,
+            "placeholders": placeholders,
+        }, indent=2))
+        return
+
+    if not missing and not placeholders:
+        click.echo(click.style("All finished entries record an outcome.", fg="green"))
+        return
+
+    if missing:
+        click.echo(f"{len(missing)} finished entry(ies) with no outcome:\n")
+        for item in missing:
+            note = "section missing" if not item["present"] else "empty"
+            click.echo(
+                f"  {click.style(item['stem'], bold=True)}"
+                f"  [{item['status']}]"
+                f"  ## {click.style(item['section'], fg='cyan')}"
+                f"  {click.style(note, fg='yellow')}"
+            )
+        click.echo()
+
+    if placeholders:
+        total = sum(item["count"] for item in placeholders)
+        click.echo(f"{total} unfilled template comment(s) in {len(placeholders)} file(s):\n")
+        for item in placeholders:
+            click.echo(
+                f"  {click.style(item['stem'], bold=True)}"
+                f"  {click.style(str(item['count']), fg='yellow')} placeholder(s)"
+            )
+        click.echo()
+
+    click.echo(
+        "Fill these through cor batch; a transition to done should carry a result."
+    )
 
 # rename command is defined in commands.refactor module and registered via register_additional_commands()
 
