@@ -627,3 +627,99 @@ class TestSyncDoesNotMoveTheProcess:
             ln for ln in src.split("\n") if not ln.lstrip().startswith("#")
         )
         assert "os.chdir" not in code
+
+
+class TestSyncAllVaults:
+    """`cor sync` syncs every registered vault, not just the resolved one."""
+
+    @pytest.fixture
+    def two_vaults(self, tmp_path, monkeypatch):
+        """Two registered vaults with uncommitted files, cwd outside both."""
+        from conftest import build_vault
+        from cor.config import add_vault
+
+        work = build_vault(tmp_path / "work")
+        personal = build_vault(tmp_path / "personal")
+        add_vault("work", work)
+        add_vault("personal", personal)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+        return {"work": work, "personal": personal, "outside": outside}
+
+    def _sync(self, *args):
+        from click.testing import CliRunner
+
+        from cor.cli import cli
+
+        return CliRunner().invoke(cli, ["sync", "--no-push", "--no-pull", *args])
+
+    def _commits(self, vault):
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "--all"],
+            capture_output=True, text=True, cwd=vault,
+        )
+        return int(result.stdout.strip() or 0)
+
+    def test_commits_every_registered_vault(self, two_vaults):
+        result = self._sync()
+        assert result.exit_code == 0, result.output
+        assert self._commits(two_vaults["work"]) == 1
+        assert self._commits(two_vaults["personal"]) == 1
+
+    def test_vault_option_limits_to_one(self, two_vaults):
+        result = self._sync("--vault", "work")
+        assert result.exit_code == 0, result.output
+        assert self._commits(two_vaults["work"]) == 1
+        assert self._commits(two_vaults["personal"]) == 0
+
+    def test_unknown_vault_option_fails(self, two_vaults):
+        result = self._sync("--vault", "nope")
+        assert result.exit_code == 1
+        assert "No vault named 'nope'" in result.output
+
+    def test_one_failing_vault_does_not_stop_the_others(self, two_vaults, tmp_path):
+        import shutil
+
+        from conftest import build_vault
+        from cor.config import add_vault
+
+        broken = build_vault(tmp_path / "broken")
+        shutil.rmtree(broken / ".git")
+        add_vault("broken", broken)
+
+        result = self._sync()
+        assert result.exit_code == 1
+        assert "Sync failed for 1 of 3 vault(s): broken" in result.output
+        assert self._commits(two_vaults["work"]) == 1
+        assert self._commits(two_vaults["personal"]) == 1
+
+    def test_unregistered_active_vault_is_skipped(self, two_vaults, tmp_path, monkeypatch):
+        from conftest import build_vault
+
+        stray = build_vault(tmp_path / "stray")
+        monkeypatch.chdir(stray)
+
+        result = self._sync()
+        assert result.exit_code == 0, result.output
+        assert "not a registered vault" in result.output
+        assert self._commits(stray) == 0
+
+    def test_integrations_run_for_default_vault_only(self, two_vaults, monkeypatch):
+        import sys
+
+        # `cor.cli.maintenance` resolves to the click Group of that name;
+        # patch the module itself.
+        module = sys.modules["cor.cli.maintenance"]
+        seen = []
+        monkeypatch.setattr(
+            module, "_sync_integrations",
+            lambda notes_dir, *a: seen.append(notes_dir),
+        )
+
+        result = self._sync()
+        assert result.exit_code == 0, result.output
+        # add_vault makes the first registered vault the default.
+        assert seen == [two_vaults["work"].resolve()]

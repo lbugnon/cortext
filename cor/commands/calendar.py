@@ -293,6 +293,19 @@ def sync(calendar: str):
       cor calendar sync              # Sync all due dates
       cor calendar sync -c "My Tasks" # Use different calendar
     """
+    sync_calendar(get_notes_dir(), calendar)
+
+
+def sync_calendar(notes_dir: Path, calendar: str = "Cor Tasks") -> None:
+    """Sync the due dates of one vault to the named Google Calendar.
+
+    Split out of the `sync` command so `cor sync` can name the vault
+    explicitly instead of relying on whichever one resolves from cwd.
+
+    The calendar mirrors exactly one vault: events whose task is not in
+    `notes_dir` are deleted. Syncing two vaults into the same calendar would
+    make each run delete the other vault's events.
+    """
     _require_google()
     # Check authentication
     service = _build_service()
@@ -301,9 +314,7 @@ def sync(calendar: str):
             "Not authenticated with Google Calendar.\n"
             "Run: cor calendar auth"
         )
-    
-    notes_dir = get_notes_dir()
-    
+
     # Find tasks and projects with due dates
     notes = find_notes(notes_dir)
     tasks_to_sync = [

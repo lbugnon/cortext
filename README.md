@@ -171,7 +171,7 @@ tags: [coding, urgent]
 | `cor link <query>` | Print a `[Title](stem.md)` markdown link (for piping) |
 | `cor depend <add\|remove\|list> …` | Manage soft task/project dependencies |
 | `cor rel <add\|rm\|show> …` | Manage relations: `continues`, `related`, `requires` |
-| `cor sync` | Commit all changes, pull, and push to remote (`--no-pull`, `--no-push`) |
+| `cor sync` | Commit, pull, and push every registered vault (`--vault NAME`, `--no-pull`, `--no-push`) |
 | `cor daily [tag]` | Forecast (overdue / today / upcoming) plus ranked next actions; `--days`, `--explain`, `--json` |
 | `cor weekly` | Show this week's summary |
 | `cor projects` | List active projects with status and last activity (from children) |
@@ -385,11 +385,16 @@ cor search "due:week" --json
 
 ### Sync & Conflict Resolution
 
+`cor sync` runs commit → pull → push in every vault registered with `cor vault add`, wherever you run it from. A vault that fails (merge conflict, no remote) is reported and the others still sync. A vault found from cwd but not registered is skipped with a warning.
+
 When working across multiple machines, sync conflicts can occur:
 
 ```bash
-# Normal sync (commit → pull → push)
+# Normal sync of all registered vaults (commit → pull → push)
 cor sync
+
+# Sync only one vault
+cor sync --vault work
 
 # Skip pull (commit + push only)
 cor sync --no-pull
@@ -568,7 +573,7 @@ cor vault default <name>    # Set the fallback vault
 
 ### Mobile Inbox via Telegram
 
-Capture notes from your phone by sending messages to a Telegram bot. Messages are automatically pulled into your backlog during `cor sync`.
+Capture notes from your phone by sending messages to a Telegram bot. Messages are automatically pulled into the default vault's backlog during `cor sync`.
 
 #### Setup (2 minutes)
 
@@ -600,7 +605,7 @@ Capture notes from your phone by sending messages to a Telegram bot. Messages ar
 
 ### Google Calendar Integration
 
-Sync task due dates to Google Calendar. Events are created automatically when you run `cor sync` (if authenticated).
+Sync task due dates to Google Calendar. Events are created automatically from the default vault when you run `cor sync` (if authenticated).
 
 2. **Authenticate**:
    ```bash
