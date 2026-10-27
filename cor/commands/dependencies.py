@@ -20,7 +20,7 @@ from ..config import get_focused_project
 @click.command(short_help="Add requirement between notes")
 @click.argument("dependent_item", shell_complete=complete_task_name)
 @click.argument("required_item", shell_complete=complete_task_name)
-@require_init
+@require_init(name_arg="dependent_item")
 def depend_add(dependent_item: str, required_item: str):
     """Add a requirement: DEPENDENT_ITEM requires REQUIRED_ITEM.
 
@@ -105,7 +105,7 @@ def depend_add(dependent_item: str, required_item: str):
 @click.command(short_help="Remove requirement between notes")
 @click.argument("dependent_item", shell_complete=complete_task_name)
 @click.argument("required_item", shell_complete=complete_task_name)
-@require_init
+@require_init(name_arg="dependent_item")
 def depend_remove(dependent_item: str, required_item: str):
     """Remove a requirement between notes.
 
