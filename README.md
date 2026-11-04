@@ -117,9 +117,12 @@ All files use YAML frontmatter. See `schema.yaml` for full specification.
 |-------|------|-------------|
 | `created` | date | Auto-set by `cor new` |
 | `modified` | date | Auto-updated by git hook |
+| `started` | date | Auto: when the entry first entered `active` (kept on reopen) |
+| `completed` | date | Auto: when the entry entered `done`/`dropped` (cleared on reopen) |
 | `due` | date | Deadline (optional) |
 | `priority` | enum | `low` \| `medium` \| `high` |
 | `tags` | list | Freeform tags |
+| `cadence` | int | Projects only: expected days between advances; idle beyond it (default 7) |
 
 ### Project Status
 
@@ -172,7 +175,7 @@ tags: [coding, urgent]
 | `cor depend <add\|remove\|list> …` | Manage soft task/project dependencies |
 | `cor rel <add\|rm\|show> …` | Manage relations: `continues`, `related`, `requires` |
 | `cor sync` | Commit, pull, and push every registered vault (`--vault NAME`, `--no-pull`, `--no-push`) |
-| `cor daily [tag]` | Forecast (overdue / today / upcoming) plus ranked next actions; `--days`, `--explain`, `--json` |
+| `cor daily [tag]` | Forecast (overdue / today / upcoming), ranked next actions, follow-ups; `--days`, `--explain`, `--json`, `--vault NAME`, `--all-vaults` |
 | `cor weekly` | Show this week's summary |
 | `cor projects` | List active projects with status and last activity (from children) |
 | `cor status` | Vault statistics and overview |
@@ -190,6 +193,7 @@ tags: [coding, urgent]
 | `cor calendar <auth\|sync\|status\|logout>` | Google Calendar integration (needs `cor-text[calendar]`) |
 | `cor maintenance sync` | Manually run archive/status sync |
 | `cor maintenance hooks <install\|uninstall>` | Install/remove the pre-commit hook and completion |
+| `cor maintenance agents-file [--force]` | Install or refresh the vault's `AGENTS.md` from the shipped version |
 | `cor search <query>` | Full-text or inventory search; filters `status:`, `#tag`, `project:`, `type:`, `priority:`, `due:`; `--json` |
 | `cor get <stem> --json` | Read one exact entry with its content revision |
 | `cor update <stem> --section <heading> --json <text>` | Replace or append one Markdown section |
@@ -201,7 +205,8 @@ tags: [coding, urgent]
 
 ### Daily View
 
-`cor daily` answers two questions: what is due, and what to do now.
+`cor daily` answers two questions: what is due, and what to do now. It is
+computed from the vault every time you run it; there is no list to maintain.
 
 ```
 Mon 13 Sep    [Focusing on: research]
@@ -218,12 +223,15 @@ NEXT                                   why
    1. Measure validation F1            overdue 2d · high · unblocks Write up
    2. Write method section             due today 15:00
    3. Select figures                   due 4d · medium
+   4. Draft outline                    project idle 26d
   ... 3 more (cor daily -a)
 
 FOLLOW-UP
+  stale    Old benchmark            overdue 94d: reschedule/drop   research
   waiting  Reviewer feedback        10d, no due                    research
   blocked  Write up                 needs research.measure         research
-  stuck    Side quest               active project, no next action
+  stuck    Side quest               active project, no next action last activity 2026-08-30
+  idle     Book chapter             idle 26d, 4 open tasks         last activity 2026-08-18
   inbox    4 unprocessed items                                     backlog.md
 ```
 
@@ -233,20 +241,63 @@ FOLLOW-UP
 - **NEXT** ranks actionable leaf tasks (status `todo` or `active`, requirements
   met, project neither paused nor done) by an additive urgency score. The `why`
   column lists what contributed: due proximity, priority, `active`, how many
-  tasks it unblocks, and `untouched Nd` for active tasks idle for more than a
-  week. `--explain` prints the score and its components; `--limit N` and `-a`
-  control how many rows you see.
-- **FOLLOW-UP** shows waiting tasks with their age, blocked tasks with what they
-  need, active projects with no next action, and the unprocessed inbox count.
+  tasks it unblocks, `untouched Nd` for active tasks idle for more than a
+  week, and `project idle Nd` (below). Ties go to the older task. `--explain`
+  prints the score and its components; `--limit N` and `-a` control how many
+  rows you see.
+- **Stale deadlines.** A task overdue for longer than `overdue_stale_days`
+  (14) is a dead deadline, not an urgent task: it leaves NEXT and is listed
+  under FOLLOW-UP as `stale … reschedule/drop`, for `cor due` or
+  `cor mark … dropped`. Within the grace period lateness still compounds, so
+  a deadline tomorrow keeps beating everything undated.
+- **Idle projects.** A live project (active or planning) that has not moved
+  for longer than its cadence (`cadence:` in the project's frontmatter, default
+  `project_cadence_days` = 7) is listed under FOLLOW-UP with its open-task
+  count, and its single best task gets a `project_idle` bonus that grows with
+  the idle time (`idle_base` 1 + `idle_per_day` 0.25 per day past cadence,
+  capped at `idle_cap` 4, which is below "due today"). So when nothing is due,
+  the projects you have neglected longest surface in NEXT, one task each, and
+  a real deadline always wins. "Moved" means a `started`/`completed` stamp or
+  a creation date; `modified` is only the fallback (see Activity stamps).
+- **FOLLOW-UP** shows stale deadlines, waiting tasks with their age, blocked
+  tasks with what they need, active projects with no next action, idle
+  projects, and the unprocessed inbox count.
 
 A tag argument narrows every section (`cor daily research`); without one, the
 focused project (`cor focus`) applies. `-v` adds each task's description.
-Urgency weights can be overridden in the `agenda:` block of the config file.
+Weights and thresholds can be overridden in the `agenda:` block of the config
+file.
+
+**Several vaults.** `cor daily --all-vaults` (`-A`) reads every registered
+vault and merges the view with the same ordering, each row labelled
+`vault › `; `cor daily --vault NAME` reads one registered vault from anywhere.
+Each vault keeps its own focus, inbox and revision; a vault that cannot be
+read is reported and skipped. Both are read-only.
 
 `cor daily --json` prints the whole result for automation. Every item carries
 `stem`, `status`, `priority`, `due`, `days_until_due`, `blocks`, `blocked_by`,
-`urgency`, `reasons` and `urgency_components`; the top level carries the vault
-`revision` to pass to `cor batch --expect-revision`.
+`urgency`, `reasons`, `urgency_components`, `stale`, `project_idle_days` and
+`vault`; `follow_up` adds `stale` and `idle_projects`; `vaults` lists
+`{name, path, revision, focus, inbox_count, error}` for each vault read; the
+top level carries the vault `revision` to pass to `cor batch --expect-revision`
+(`null` when several vaults were merged: use `vaults[i].revision`).
+
+### Activity Stamps
+
+Every commit and every batch write rewrites `modified`, so it cannot tell
+whether a project moved or was merely re-saved. Two stamps record real moves
+and are written on the status change itself (`cor mark`, `cor batch`, or a
+hand edit at commit time through the pre-commit hook):
+
+| Field | Set when | Cleared when |
+|---|---|---|
+| `started` | the entry first enters `active` | never (kept on reopen) |
+| `completed` | the entry enters `done` or `dropped` | it is reopened |
+
+`cor weekly` counts a task as completed only by its `completed` stamp and says
+how many closed tasks predate it. `cor projects` dates a project by its latest
+stamp or creation date and marks a date that had to fall back on `modified`
+with `~`. Both fields are managed: `cor batch update` refuses them.
 
 ### Agent and Automation Interface
 
@@ -547,9 +598,13 @@ vault: /home/user/notes/work   # Legacy key, mirrors the default
 verbosity: 1                   # 0=silent, 1=normal, 2=verbose, 3=debug
 timezone: UTC                  # For calendar event times
 remote_inbox: 123456:ABC...    # Telegram bot token (optional)
-agenda:                        # Optional urgency weight overrides for cor daily
+agenda:                        # Optional weight/threshold overrides for cor daily
   priority_high: 4
   untouched_days: 7
+  overdue_stale_days: 14       # overdue longer than this is triage, not NEXT
+  project_cadence_days: 7      # a project is idle beyond this (or its own cadence:)
+  idle_cap: 4                  # max project_idle bonus (also idle_base, idle_per_day)
+  project_stale_days: 14       # red "(stale)" in cor projects
 vault_state:                   # Per-vault state, so focus doesn't leak
   work:
     focus: myproject

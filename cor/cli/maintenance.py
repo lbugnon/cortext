@@ -361,6 +361,22 @@ def maintenance_sync(sync_all: bool):
         click.echo(click.style("\nDone!", fg="green"))
 
 
+@maintenance.command("agents-file")
+@click.option("--force", is_flag=True, help="Overwrite an edited AGENTS.md without asking")
+@require_init
+def maintenance_agents_file(force: bool):
+    """Install or refresh the vault's AGENTS.md from the version cor ships.
+
+    Missing: written. Identical: nothing to do. Different (edited, or a newer
+    cor ships newer instructions): asks before overwriting, unless --force.
+    `cor init` does the same among everything else it sets up.
+    """
+    from .init import AGENTS_FILENAME, _install_agents_file
+    dest = _install_agents_file(get_notes_dir(), force=force)
+    if dest is None:
+        click.echo(f"{AGENTS_FILENAME} left as it is.")
+
+
 @maintenance.group("hooks")
 def hooks():
     """Manage git hooks and shell completion.

@@ -723,3 +723,27 @@ class TestSyncAllVaults:
         assert result.exit_code == 0, result.output
         # add_vault makes the first registered vault the default.
         assert seen == [two_vaults["work"].resolve()]
+
+
+class TestAgentsFile:
+    """`cor maintenance agents-file` refreshes AGENTS.md from the shipped asset."""
+
+    def test_install_refresh_and_force(self, runner, temp_vault):
+        from cor.cli import cli
+        from pathlib import Path
+        import cor
+        shipped = (Path(cor.__file__).parent / "assets" / "vault_agents.md").read_text()
+        agents = temp_vault / "AGENTS.md"
+        assert not agents.exists()
+        assert runner.invoke(cli, ["maintenance", "agents-file"]).exit_code == 0
+        assert agents.read_text() == shipped
+        # Identical: nothing to do.
+        again = runner.invoke(cli, ["maintenance", "agents-file"])
+        assert again.exit_code == 0 and "left as it is" in again.output
+        # Edited: refused without consent, overwritten with --force.
+        agents.write_text(shipped + "\nMy own rule.\n")
+        declined = runner.invoke(cli, ["maintenance", "agents-file"], input="n\n")
+        assert "My own rule." in agents.read_text(), declined.output
+        forced = runner.invoke(cli, ["maintenance", "agents-file", "--force"])
+        assert forced.exit_code == 0, forced.output
+        assert agents.read_text() == shipped

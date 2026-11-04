@@ -42,12 +42,13 @@ def _install_nvim_plugin(yes: bool = False):
 AGENTS_FILENAME = "AGENTS.md"
 
 
-def _install_agents_file(vault_path: Path, yes: bool = False) -> Path | None:
+def _install_agents_file(vault_path: Path, yes: bool = False, force: bool = False) -> Path | None:
     """Install the instructions file that coding agents read from the vault root.
 
     Missing: write it. Identical: nothing to do. Different (the user edited it,
     or a newer cor ships a newer template): ask before overwriting, and never
-    overwrite silently under --yes.
+    overwrite silently under --yes. ``force`` overwrites without asking (the
+    explicit `cor maintenance agents-file --force`).
     """
     source = Path(__file__).parent.parent / "assets" / "vault_agents.md"
     dest = vault_path / AGENTS_FILENAME
@@ -56,10 +57,10 @@ def _install_agents_file(vault_path: Path, yes: bool = False) -> Path | None:
         if dest.read_text() == content:
             log_verbose(f"{AGENTS_FILENAME} is up to date.")
             return None
-        if yes:
+        if yes and not force:
             log_info(f"{AGENTS_FILENAME} exists and differs from the shipped version; left untouched.")
             return None
-        if not click.confirm(
+        if not force and not click.confirm(
             f"{AGENTS_FILENAME} exists and differs from the shipped version. Overwrite?",
             default=False,
         ):
