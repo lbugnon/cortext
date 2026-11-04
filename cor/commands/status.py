@@ -10,7 +10,7 @@ from ..core.notes import find_notes, matches_tag, build_project_tags
 from ..schema import STATUS_SYMBOLS
 from ..utils import get_notes_dir, format_time_ago, format_due_date, require_init, format_title, get_parent_name
 from ..config import get_focused_project, load_config
-from ..core.activity import project_last_advanced, resolve_stale_days
+from ..core.activity import project_activity, project_last_advanced, resolve_stale_days
 
 # Colors, symbols and ordering all come from the presentation layer. These
 # names are kept as aliases because they are referenced throughout this module.
@@ -474,11 +474,16 @@ def projects(show_all: bool):
     for p in projects_list:
         # Use last activity from children, fall back to project modified date
         project_name = p.path.stem
-        last_activity = _get_project_last_activity(project_name, activity_notes)
+        activity = project_activity(project_name, activity_notes)
+        last_activity = activity.when
         ref_date = last_activity or p.modified or p.created
         
-        # Calculate time since modified
+        # Calculate time since the project last moved. A trailing ~ marks a
+        # date taken from `modified`, which every commit rewrites, rather
+        # than from a started/completed stamp or a creation date.
         age_str = format_time_ago(ref_date) if ref_date else "unknown"
+        if activity.source == "modified":
+            age_str += "~"
         days_ago = (datetime.now() - ref_date).days if ref_date else 0
 
         # Determine color (stale overrides status color)
@@ -570,6 +575,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
     # project_name -> {done: int, active: int, total: int, high_priority: [tasks]}
     project_data = {}
     completed_this_week = set()  # paths of tasks completed this week
+    unstamped_closed = 0  # closed tasks that predate the completed: stamp
     tasks_by_parent = {}  # parent_name -> [tasks]
     all_tasks = {}  # path.stem -> note
 
@@ -592,9 +598,14 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
 
         if n.status in ("done", "dropped"):
             project_data[project]["done"] += 1
-            # Check if completed this period
-            if n.modified and n.modified >= start_date:
-                completed_this_week.add(n.path.stem)
+            # Completed this period: only the `completed` stamp counts.
+            # `modified` is rewritten by every commit, so it would report
+            # every task ever closed after a bulk commit.
+            if n.completed:
+                if n.completed >= start_date:
+                    completed_this_week.add(n.path.stem)
+            else:
+                unstamped_closed += 1
         elif n.status in ("active", "waiting"):
             project_data[project]["active"] += 1
 
@@ -717,12 +728,23 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
         return
 
     # === Default view: show completed tasks this week ===
+    unstamped_note = (
+        click.style(
+            f"({unstamped_closed} finished tasks predate the completed: stamp and are not counted)",
+            dim=True,
+        )
+        if unstamped_closed else None
+    )
     if not projects_with_completed:
         emit(click.style("\nNo completed tasks this week.", dim=True))
+        if unstamped_note:
+            emit(unstamped_note)
         emit()
         return
 
     emit(click.style(f"\nCompleted: {len(completed_this_week)} tasks\n", fg="green", bold=True))
+    if unstamped_note:
+        emit(unstamped_note)
 
     def has_completed_descendant(parent_name: str) -> bool:
         """Check if parent has any completed descendants this week."""

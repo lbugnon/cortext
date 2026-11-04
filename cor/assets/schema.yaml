@@ -14,6 +14,18 @@ common:
     description: Datetime file was last modified
     auto: true  # Updated by git pre-commit hook
 
+  started:
+    type: date
+    format: YYYY-MM-DD HH:MM
+    description: When the entry first became active. Kept when it is reopened.
+    auto: true  # Stamped on the status change (cor mark, cor batch, or the pre-commit hook)
+
+  completed:
+    type: date
+    format: YYYY-MM-DD HH:MM
+    description: When the entry was marked done or dropped. Cleared when it is reopened.
+    auto: true  # Stamped on the status change; `cor weekly` and project activity read it
+
   tags:
     type: list
     items: string
