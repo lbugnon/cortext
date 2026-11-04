@@ -147,6 +147,9 @@ def _next_section(items: list[AgendaItem], limit: int, explain: bool, verbose: b
 
 def _follow_up_rows(agenda: Agenda) -> list[tuple[str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str]] = []
+    for item in agenda.stale:
+        rows.append(("stale", theme.ERROR, item.title,
+                     f"overdue {-item.days_until_due}d: reschedule/drop", _where(item)))
     for item in agenda.waiting:
         age = f"{item.days_since_modified}d" if item.days_since_modified is not None else "?"
         due = f"due {due_to_iso(item.due)}" if item.due else "no due"
@@ -157,6 +160,11 @@ def _follow_up_rows(agenda: Agenda) -> list[tuple[str, str, str, str, str]]:
     for project in agenda.stuck_projects:
         last = f"last activity {project.last_activity:%Y-%m-%d}" if project.last_activity else ""
         rows.append(("stuck", theme.WARN, project.title, "active project, no next action", last))
+    for project in agenda.idle_projects:
+        noun = "task" if project.open_tasks == 1 else "tasks"
+        last = f"last activity {project.last_activity:%Y-%m-%d}" if project.last_activity else ""
+        rows.append(("idle", theme.WARN, project.title,
+                     f"idle {project.idle_days}d, {project.open_tasks} open {noun}", last))
     if agenda.inbox_count:
         noun = "item" if agenda.inbox_count == 1 else "items"
         rows.append(("inbox", theme.ACCENT, f"{agenda.inbox_count} unprocessed {noun}", "", "backlog.md"))
@@ -179,7 +187,7 @@ def _follow_up_section(agenda: Agenda) -> list[str]:
 def render_text(agenda: Agenda, *, limit: int, explain: bool, verbose: bool) -> str:
     """Render the agenda as the coloured terminal view. ``limit`` 0 means no limit."""
     lines = [_header(agenda)]
-    lines += _timeline_section("OVERDUE", theme.ERROR, agenda.overdue, verbose)
+    lines += _timeline_section("OVERDUE", theme.ERROR, agenda.overdue_live, verbose)
     lines += _timeline_section("TODAY", theme.ACCENT, agenda.today, verbose)
     lines += _timeline_section("UPCOMING", None, agenda.upcoming, verbose)
     lines += _next_section(agenda.next_items, limit, explain, verbose)
@@ -214,12 +222,16 @@ def daily(horizon: int, limit: int, show_all: bool, explain: bool, verbose: bool
                                 by day, with priority and parent
     NEXT                        actionable tasks ranked by urgency, each with
                                 the reasons behind its rank
-    FOLLOW-UP                   waiting tasks, blocked tasks, active projects
-                                with no next action, unprocessed inbox lines
+    FOLLOW-UP                   stale deadlines, waiting tasks, blocked tasks,
+                                active projects with no next action, idle
+                                projects, unprocessed inbox lines
 
     Urgency adds bounded components: due proximity, priority, active status,
-    how many tasks this one unblocks, an active parent project, age, and time
-    idle while active. Weights can be overridden under `agenda:` in the config.
+    how many tasks this one unblocks, an active parent project, time idle
+    while active, and a project-idle bonus for the best task of a project
+    that has not moved for longer than its cadence. A deadline overdue for
+    longer than the stale threshold leaves NEXT and is listed for triage.
+    Weights and thresholds can be overridden under `agenda:` in the config.
 
     A TAG narrows every section to one project, note tag, or propagated
     project tag; with no tag the focused project (`cor focus`) applies.
@@ -228,6 +240,7 @@ def daily(horizon: int, limit: int, show_all: bool, explain: bool, verbose: bool
     """
     notes_dir = get_notes_dir()
     now = datetime.now()
+    archive_dir = notes_dir / "archive"
     agenda = build_agenda(
         find_notes(notes_dir),
         today=now.date(),
@@ -238,6 +251,7 @@ def daily(horizon: int, limit: int, show_all: bool, explain: bool, verbose: bool
         inbox_count=count_inbox_items(notes_dir / "backlog.md"),
         revision=vault_revision(notes_dir),
         weights=resolve_weights(load_config().get("agenda")),
+        archived_notes=find_notes(archive_dir, metadata_only=True) if archive_dir.is_dir() else (),
     )
     if as_json:
         _emit_json(agenda.to_dict())

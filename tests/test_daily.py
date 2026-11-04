@@ -30,7 +30,9 @@ def at(days: int, hour: int = 0, minute: int = 0) -> datetime:
 
 def mk(stem: str, *, type: str = "task", status: str = "todo", due: datetime | None = None,
        priority: str | None = None, requires=(), modified: datetime | None = None,
-       created: datetime | None = None, tags=(), title: str | None = None, content: str = "") -> Note:
+       created: datetime | None = None, tags=(), title: str | None = None, content: str = "",
+       cadence: int | None = None, started: datetime | None = None,
+       completed: datetime | None = None) -> Note:
     leaf = stem.rsplit(".", 1)[-1]
     return Note(
         path=Path(f"{stem}.md"),
@@ -46,6 +48,9 @@ def mk(stem: str, *, type: str = "task", status: str = "todo", due: datetime | N
         continues=[],
         related=[],
         content=content,
+        cadence=cadence,
+        started=started,
+        completed=completed,
     )
 
 
@@ -202,6 +207,136 @@ class TestNext:
         assert far.urgency_components["due"] == pytest.approx(DEFAULT_WEIGHTS["due_soon_bump"])
         assert far.urgency > by_stem(items, "p.none").urgency
 
+    def test_older_created_breaks_ties(self):
+        notes = [mk("p", type="project", status="active"),
+                 mk("p.new", created=at(-1)), mk("p.old", created=at(-50)), mk("p.undated")]
+        items = agenda(notes).next_items
+        assert len({i.urgency for i in items}) == 1
+        assert stems(items) == ["p.old", "p.new", "p.undated"]
+
+
+# --- stale deadlines -----------------------------------------------------------
+
+class TestStale:
+    def test_stale_deadline_leaves_next_and_is_listed(self):
+        notes = [mk("p", type="project", status="active"), mk("p.dead", due=at(-20)), mk("p.t")]
+        ag = agenda(notes)
+        dead = by_stem(ag.overdue, "p.dead")
+        assert dead.stale is True
+        assert "overdue 20d (stale)" in dead.reasons
+        assert stems(ag.stale) == ["p.dead"]
+        assert stems(ag.next_items) == ["p.t"]
+        assert stems(ag.overdue_live) == []
+        assert ag.to_dict()["follow_up"]["stale"][0]["stem"] == "p.dead"
+
+    def test_overdue_within_grace_stays(self):
+        ag = agenda([mk("p", type="project", status="active"), mk("p.late", due=at(-10)), mk("p.t")])
+        late = by_stem(ag.next_items, "p.late")
+        assert late.stale is False and late.reasons == ["overdue 10d"]
+        assert ag.stale == [] and stems(ag.overdue_live) == ["p.late"]
+
+    def test_stale_threshold_is_configurable(self):
+        notes = [mk("p", type="project", status="active"), mk("p.late", due=at(-10))]
+        ag = agenda(notes, weights={"overdue_stale_days": 5})
+        assert stems(ag.stale) == ["p.late"] and ag.next_items == []
+
+    def test_stale_project_deadline_hidden_but_not_triaged_as_task(self):
+        ag = agenda([mk("p", type="project", status="active", due=at(-30)), mk("p.t")])
+        assert by_stem(ag.overdue, "p").stale is True
+        assert ag.overdue_live == [] and ag.stale == []
+        assert stems(ag.next_items) == ["p.t"]
+
+
+# --- idle projects -------------------------------------------------------------
+
+class TestIdleProjects:
+    def test_idle_project_bonus_on_best_task_only(self):
+        notes = [
+            mk("q", type="project", status="active", modified=at(-30)),
+            mk("q.a", priority="high", modified=at(-30)), mk("q.b", modified=at(-30)),
+        ]
+        ag = agenda(notes)
+        a, b = by_stem(ag.next_items, "q.a"), by_stem(ag.next_items, "q.b")
+        assert a.project_idle_days == b.project_idle_days == 30
+        # 30 idle - 7 cadence = 23 days past cadence -> 1 + 0.25 * 23 = 6.75, capped at 4
+        assert a.urgency_components["project_idle"] == pytest.approx(DEFAULT_WEIGHTS["idle_cap"])
+        assert "project idle 30d" in a.reasons
+        assert b.urgency_components["project_idle"] == 0.0
+        assert not any(r.startswith("project idle") for r in b.reasons)
+        assert stems(ag.next_items) == ["q.a", "q.b"]
+
+    def test_idle_bonus_grows_from_cadence(self):
+        notes = [mk("q", type="project", status="active", modified=at(-11)), mk("q.t", modified=at(-11))]
+        t = by_stem(agenda(notes).next_items, "q.t")
+        # 11 - 7 = 4 days past cadence -> 1 + 0.25 * 4 = 2.0
+        assert t.urgency_components["project_idle"] == pytest.approx(2.0)
+
+    def test_idle_bonus_never_beats_due_today_or_overdue(self):
+        notes = [
+            mk("p", type="project", status="active", modified=at(0)),
+            mk("p.today", due=at(0), modified=at(0)), mk("p.late", due=at(-1), modified=at(0)),
+            mk("p.plain", modified=at(0)),
+            mk("q", type="project", status="active", modified=at(-60)), mk("q.t", modified=at(-60)),
+        ]
+        items = agenda(notes).next_items
+        assert stems(items) == ["p.late", "p.today", "q.t", "p.plain"]
+        assert "project idle 60d" in by_stem(items, "q.t").reasons
+
+    def test_idle_respects_cadence_override(self):
+        slow = [mk("q", type="project", status="active", modified=at(-20), cadence=30), mk("q.t", modified=at(-20))]
+        ag = agenda(slow)
+        assert by_stem(ag.next_items, "q.t").urgency_components["project_idle"] == 0.0
+        assert ag.idle_projects == []
+        default = [mk("q", type="project", status="active", modified=at(-20)), mk("q.t", modified=at(-20))]
+        ag = agenda(default)
+        assert by_stem(ag.next_items, "q.t").urgency_components["project_idle"] > 0
+        assert [p.stem for p in ag.idle_projects] == ["q"]
+        assert ag.idle_projects[0].cadence_days == 7
+
+    def test_idle_projects_listed_sorted_by_idle_days(self):
+        notes = [
+            mk("a", type="project", status="active", modified=at(-15)), mk("a.t", modified=at(-15)),
+            mk("b", type="project", status="planning", modified=at(-30)),
+            mk("b.t1", modified=at(-30)), mk("b.t2", status="blocked", modified=at(-30)),
+            mk("b.done", status="done", modified=at(-30)),
+            mk("fresh", type="project", status="active", modified=at(-1)), mk("fresh.t", modified=at(-1)),
+            mk("stuck", type="project", status="active", modified=at(-40)),
+            mk("stuck.w", status="waiting", modified=at(-40)),
+            mk("paused", type="project", status="paused", modified=at(-90)), mk("paused.t", modified=at(-90)),
+        ]
+        ag = agenda(notes)
+        idle = ag.idle_projects
+        assert [(p.stem, p.idle_days, p.open_tasks) for p in idle] == [("b", 30, 2), ("a", 15, 1)]
+        assert idle[0].status == "planning" and idle[0].last_activity == at(-30)
+        assert [p.stem for p in ag.stuck_projects] == ["stuck"]
+        payload = ag.to_dict()["follow_up"]["idle_projects"][0]
+        assert set(payload) == {"stem", "title", "status", "idle_days", "cadence_days", "open_tasks",
+                                "last_activity", "vault"}
+
+    def test_no_activity_date_means_no_bonus(self):
+        ag = agenda([mk("q", type="project", status="active"), mk("q.t")])
+        t = by_stem(ag.next_items, "q.t")
+        assert t.project_idle_days is None
+        assert t.urgency_components["project_idle"] == 0.0
+        assert ag.idle_projects == []
+
+    def test_archived_completed_stamp_counts_as_activity(self):
+        live = [mk("q", type="project", status="active", modified=at(-40)), mk("q.t", modified=at(-40))]
+        archived = [mk("q.old", status="done", modified=at(-40), completed=at(-2))]
+        ag = agenda(live, archived_notes=archived)
+        t = by_stem(ag.next_items, "q.t")
+        assert t.project_idle_days == 2
+        assert t.urgency_components["project_idle"] == 0.0
+        assert ag.idle_projects == []
+        assert stems(ag.next_items) == ["q.t"]  # archived notes never appear
+
+    def test_tag_filter_applies_to_idle_projects(self):
+        notes = [
+            mk("a", type="project", status="active", modified=at(-20)), mk("a.t", modified=at(-20)),
+            mk("b", type="project", status="active", modified=at(-20)), mk("b.t", modified=at(-20)),
+        ]
+        assert [p.stem for p in agenda(notes, tag="a").idle_projects] == ["a"]
+
 
 # --- filtering -----------------------------------------------------------------
 
@@ -259,10 +394,10 @@ class TestFollowUp:
 class TestHelpers:
     def test_resolve_weights(self):
         assert resolve_weights(None) == DEFAULT_WEIGHTS
-        merged = resolve_weights({"priority_high": 9, "unknown": 3, "active": "abc", "age_cap": True})
+        merged = resolve_weights({"priority_high": 9, "unknown": 3, "active": "abc", "idle_cap": True})
         assert merged["priority_high"] == 9.0
         assert merged["active"] == DEFAULT_WEIGHTS["active"]
-        assert merged["age_cap"] == DEFAULT_WEIGHTS["age_cap"]
+        assert merged["idle_cap"] == DEFAULT_WEIGHTS["idle_cap"]
         assert "unknown" not in merged
 
     def test_count_inbox_items(self, tmp_path):
@@ -276,14 +411,17 @@ class TestHelpers:
         payload = agenda(notes, revision="abc123", inbox_count=1).to_dict()
         assert payload["ok"] is True and payload["revision"] == "abc123"
         assert set(payload) >= {"date", "focus", "tag", "horizon_days", "overdue", "today", "upcoming",
-                                "next", "follow_up", "counts"}
-        assert set(payload["follow_up"]) == {"waiting", "blocked", "stuck_projects", "inbox_count"}
+                                "next", "follow_up", "counts", "vaults"}
+        assert set(payload["follow_up"]) == {"stale", "waiting", "blocked", "stuck_projects",
+                                             "idle_projects", "inbox_count"}
         assert payload["counts"]["today"] == 1 and payload["counts"]["next"] == 1
+        assert payload["vaults"] == []
         item = payload["today"][0]
         assert set(item) == {"stem", "title", "type", "status", "priority", "due", "due_has_time",
                              "days_until_due", "project", "parent", "tags", "modified",
                              "days_since_modified", "blocks", "blocked_by", "urgency", "reasons",
-                             "urgency_components"}
+                             "urgency_components", "stale", "project_idle_days", "vault"}
+        assert item["stale"] is False and item["project_idle_days"] == 1 and item["vault"] is None
         assert item["due"] == "2026-09-13 15:00" and item["modified"] == "2026-09-12 00:00"
         json.dumps(payload)  # must be serialisable as-is
 
@@ -368,6 +506,39 @@ class TestDailyCli:
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload["ok"] is False and payload["error"]["code"]
+
+    def test_stale_hidden_from_overdue_shown_in_followup(self, runner, daily_vault):
+        runner.invoke(cli, ["new", "task", "myproj.dead", "Task dead", "--no-edit"])
+        _set_meta(daily_vault / "myproj.dead.md", due=(date.today() - timedelta(days=40)).isoformat())
+        result = runner.invoke(cli, ["daily", "-a"], env={"NO_COLOR": "1"})
+        assert result.exit_code == 0, result.output
+        assert result.output.count("Dead") == 1
+        assert "stale    Dead" in result.output and "overdue 40d: reschedule/drop" in result.output
+        assert "2d  [ ] Late" in result.output  # overdue within grace still listed
+
+    def test_idle_row_in_followup(self, runner, daily_vault):
+        runner.invoke(cli, ["new", "project", "sleepy", "--no-edit"])
+        runner.invoke(cli, ["new", "task", "sleepy.one", "One", "--no-edit"])
+        runner.invoke(cli, ["new", "task", "sleepy.two", "Two", "--no-edit"])
+        old = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d %H:%M")
+        for stem in ("sleepy", "sleepy.one", "sleepy.two"):
+            _set_meta(daily_vault / f"{stem}.md", created=old, modified=old)
+        _set_meta(daily_vault / "sleepy.md", status="active")
+        result = runner.invoke(cli, ["daily", "-a", "--explain"], env={"NO_COLOR": "1"})
+        assert result.exit_code == 0, result.output
+        assert "idle     Sleepy" in result.output and "idle 20d, 2 open tasks" in result.output
+        assert result.output.count("project idle 20d") == 1
+        assert "project_idle 4" in result.output
+
+    def test_json_exposes_stale_and_idle(self, runner, daily_vault):
+        runner.invoke(cli, ["new", "task", "myproj.dead", "Task dead", "--no-edit"])
+        _set_meta(daily_vault / "myproj.dead.md", due=(date.today() - timedelta(days=40)).isoformat())
+        payload = json.loads(runner.invoke(cli, ["daily", "--json"]).output)
+        assert [i["stem"] for i in payload["follow_up"]["stale"]] == ["myproj.dead"]
+        assert "myproj.dead" not in [i["stem"] for i in payload["next"]]
+        dead = next(i for i in payload["overdue"] if i["stem"] == "myproj.dead")
+        assert dead["stale"] is True and dead["project_idle_days"] == 0 and dead["vault"] is None
+        assert payload["follow_up"]["idle_projects"] == [] and payload["counts"]["stale"] == 1
 
     def test_focus_indicator(self, runner, daily_vault):
         runner.invoke(cli, ["new", "project", "other", "--no-edit"])

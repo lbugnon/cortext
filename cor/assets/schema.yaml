@@ -48,6 +48,15 @@ project:
     description: List of task/project stems this project requires (soft dependencies)
     optional: true
 
+  cadence:
+    type: int
+    description: |
+      Expected days between advances. The daily view treats the project as
+      idle once nothing under it has moved for longer than this, lists it
+      under FOLLOW-UP and gives its best task a bounded urgency bonus.
+      Unset means the configured default (`agenda.project_cadence_days`, 7).
+    optional: true
+
   continues:
     type: list
     items: string

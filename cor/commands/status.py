@@ -9,7 +9,8 @@ from ..completions import complete_project, complete_existing_name
 from ..core.notes import find_notes, matches_tag, build_project_tags
 from ..schema import STATUS_SYMBOLS
 from ..utils import get_notes_dir, format_time_ago, format_due_date, require_init, format_title, get_parent_name
-from ..config import get_focused_project
+from ..config import get_focused_project, load_config
+from ..core.activity import project_last_advanced, resolve_stale_days
 
 # Colors, symbols and ordering all come from the presentation layer. These
 # names are kept as aliases because they are referenced throughout this module.
@@ -409,17 +410,8 @@ def _build_subtree(
 
 
 def _get_project_last_activity(project_name: str, all_notes: list) -> datetime | None:
-    """Get the most recent modification date from a project's tasks/notes."""
-    most_recent = None
-    
-    for note in all_notes:
-        # Check if this note belongs to the project
-        if note.parent_project == project_name and note.note_type in ("task", "note"):
-            if note.modified:
-                if most_recent is None or note.modified > most_recent:
-                    most_recent = note.modified
-    
-    return most_recent
+    """When the project last moved: the shared definition from ``cor.core.activity``."""
+    return project_last_advanced(project_name, all_notes)
 
 
 @click.command(short_help="List projects with status and activity")
@@ -432,18 +424,22 @@ def projects(show_all: bool):
     Details:
     - Sorted by last activity (most recent task/note update)
     - Color-coded: planning (blue), active (green), paused (yellow)
-    - Stale projects (>14 days) highlighted in red
+    - Stale projects (idle longer than `agenda.project_stale_days`, default
+      14) highlighted in red
     - Use -a to include done/archived projects
     """
     notes_dir = get_notes_dir()
+    stale_days = resolve_stale_days(load_config().get("agenda"))
 
     notes = find_notes(notes_dir)
 
-    # Include archived projects if -a flag is set
-    if show_all:
-        archive_dir = notes_dir / "archive"
-        if archive_dir.exists():
-            notes.extend(find_notes(archive_dir))
+    # Archived entries carry the `completed` stamps that date a project's
+    # last real move; they only join the listing itself under -a.
+    archive_dir = notes_dir / "archive"
+    archived = find_notes(archive_dir, metadata_only=True) if archive_dir.exists() else []
+    if show_all and archive_dir.exists():
+        notes.extend(find_notes(archive_dir))
+    activity_notes = notes + archived if not show_all else notes
 
     # Filter to projects only (exclude done unless show_all)
     if show_all:
@@ -466,7 +462,7 @@ def projects(show_all: bool):
     # Handle None dates by placing them at the beginning (needs attention)
     def get_sort_key(proj):
         project_name = proj.path.stem
-        last_activity = _get_project_last_activity(project_name, notes)
+        last_activity = _get_project_last_activity(project_name, activity_notes)
         return last_activity or proj.modified or datetime.min
     
     projects_list.sort(key=get_sort_key)
@@ -478,7 +474,7 @@ def projects(show_all: bool):
     for p in projects_list:
         # Use last activity from children, fall back to project modified date
         project_name = p.path.stem
-        last_activity = _get_project_last_activity(project_name, notes)
+        last_activity = _get_project_last_activity(project_name, activity_notes)
         ref_date = last_activity or p.modified or p.created
         
         # Calculate time since modified
@@ -486,7 +482,7 @@ def projects(show_all: bool):
         days_ago = (datetime.now() - ref_date).days if ref_date else 0
 
         # Determine color (stale overrides status color)
-        is_stale = (days_ago > 7) and (p.status == "active")
+        is_stale = (days_ago > stale_days) and (p.status == "active")
         if is_stale:
             color = "red"
             status_display = f"{p.status or 'no status'} (stale)"
