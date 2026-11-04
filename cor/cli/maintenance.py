@@ -9,6 +9,7 @@ import click
 from ..config import (
     _known_vaults_hint,
     get_default_vault,
+    for_each_vault,
     get_vaults,
     is_vault_initialized,
     resolve_vault,
@@ -45,14 +46,8 @@ def sync(message: str | None, no_push: bool, no_pull: bool, only_vault: str | No
       cor sync -m "Add new tasks"     # With custom message
       cor sync --no-push              # Local commit only
     """
-    vaults = get_vaults()
-    if not vaults:
-        raise ConfigError("No vaults registered. Run 'cor vault add <name> <path>'.")
-    if only_vault is not None:
-        if only_vault not in vaults:
-            raise ConfigError(f"No vault named '{only_vault}'. Known: {_known_vaults_hint(vaults)}")
-        vaults = {only_vault: vaults[only_vault]}
-    else:
+    vaults = dict(for_each_vault([only_vault] if only_vault is not None else None))
+    if only_vault is None:
         _warn_unregistered_active_vault(vaults)
 
     default_name = get_default_vault()

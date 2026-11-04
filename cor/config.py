@@ -194,6 +194,27 @@ def get_vaults() -> dict[str, Path]:
     return _read_vaults(load_config())
 
 
+def for_each_vault(names=None) -> list[tuple[str, Path]]:
+    """Return ``(name, path)`` for the requested registered vaults.
+
+    With ``names`` (an iterable of registered names) the vaults come back in
+    that order; without, every registered vault sorted by name. Commands that
+    span vaults (`cor sync`, `cor daily --all`) share this so they agree on
+    what "every vault" means. An empty registry or an unknown name is a
+    ``ConfigError`` naming the known vaults.
+    """
+    vaults = get_vaults()
+    if not vaults:
+        raise ConfigError("No vaults registered. Run 'cor vault add <name> <path>'.")
+    if names:
+        chosen = list(names)
+        for name in chosen:
+            if name not in vaults:
+                raise ConfigError(f"No vault named '{name}'. Known: {_known_vaults_hint(vaults)}")
+        return [(name, vaults[name].expanduser()) for name in chosen]
+    return [(name, vaults[name].expanduser()) for name in sorted(vaults)]
+
+
 def add_vault(name: str, path: Path) -> None:
     """Register a vault under `name`, making it the default if it is the first."""
     config = load_config()
@@ -359,10 +380,20 @@ def _current_vault_key() -> str:
         return ""
 
 
-def get_focused_project() -> str | None:
-    """Get the focused project for the active vault, or None."""
+def get_focused_project(vault: Path | str | None = None) -> str | None:
+    """Get the focused project for a vault, or None.
+
+    ``vault`` is a registered name, a vault path, or None for the active
+    vault. Commands reading several vaults pass each one explicitly so a
+    focus set in one never narrows another.
+    """
     config = load_config()
-    key = _current_vault_key()
+    if vault is None:
+        key = _current_vault_key()
+    elif isinstance(vault, Path):
+        key = vault_name_for(vault)
+    else:
+        key = str(vault)
     state = config.get("vault_state") or {}
     if key and isinstance(state, dict) and key in state:
         return (state[key] or {}).get("focus")

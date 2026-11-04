@@ -174,6 +174,15 @@ def complete_name(ctx, param, incomplete: str) -> list:
     return []
 
 
+def complete_vault_name(ctx, param, incomplete: str) -> list:
+    """Complete a registered vault name (for --vault options)."""
+    try:
+        from .config import get_vaults
+        return [name for name in sorted(get_vaults()) if name.startswith(incomplete)]
+    except Exception:
+        return []
+
+
 def complete_project(ctx, param, incomplete: str) -> list:
     """Shell completion for project names with fuzzy fallback."""
     from .search import fuzzy_match

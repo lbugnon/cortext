@@ -265,7 +265,9 @@ class Agenda:
     """Everything ``cor daily`` shows, before any rendering decision."""
 
     date: date
-    revision: str
+    #: Vault content hash; None for a view merged over several vaults (use
+    #: ``vaults[i]["revision"]`` instead).
+    revision: str | None
     focus: str | None
     tag: str | None
     horizon_days: int

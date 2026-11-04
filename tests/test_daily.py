@@ -537,7 +537,9 @@ class TestDailyCli:
         assert [i["stem"] for i in payload["follow_up"]["stale"]] == ["myproj.dead"]
         assert "myproj.dead" not in [i["stem"] for i in payload["next"]]
         dead = next(i for i in payload["overdue"] if i["stem"] == "myproj.dead")
-        assert dead["stale"] is True and dead["project_idle_days"] == 0 and dead["vault"] is None
+        assert dead["stale"] is True and dead["project_idle_days"] == 0 and dead["vault"] == "notes"
+        assert [v["name"] for v in payload["vaults"]] == ["notes"]
+        assert payload["vaults"][0]["revision"] == payload["revision"]
         assert payload["follow_up"]["idle_projects"] == [] and payload["counts"]["stale"] == 1
 
     def test_focus_indicator(self, runner, daily_vault):
@@ -549,3 +551,118 @@ class TestDailyCli:
         assert "Side" not in result.output
         explicit = runner.invoke(cli, ["daily", "other"], env={"NO_COLOR": "1"})
         assert "[Filter: other]" in explicit.output and "Side" in explicit.output
+
+
+# --- several vaults --------------------------------------------------------------
+
+from conftest import build_vault  # noqa: E402
+from cor.config import add_vault, set_focused_project  # noqa: E402
+
+
+def _entry(vault: Path, stem: str, *, type: str, status: str, **meta) -> Path:
+    """Write one minimal entry straight to disk (no CLI, no git)."""
+    today = date.today().isoformat()
+    lines = [f"created: {today}", f"modified: {today}", f"type: {type}", f"status: {status}"]
+    lines += [f"{key}: {value}" for key, value in meta.items()]
+    title = stem.rsplit(".", 1)[-1].replace("_", " ").capitalize()
+    path = vault / f"{stem}.md"
+    path.write_text("---\n" + "\n".join(lines) + "\n---\n# " + title + "\n")
+    return path
+
+
+@pytest.fixture
+def two_vaults(tmp_path, monkeypatch):
+    """Two registered vaults sharing a project stem, cwd parked outside both."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.delenv("COR_VAULT", raising=False)
+    work = build_vault(tmp_path / "work")
+    personal = build_vault(tmp_path / "personal")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    add_vault("work", work)
+    add_vault("personal", personal)
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    for vault in (work, personal):
+        _entry(vault, "proj", type="project", status="active")
+        _entry(vault, "proj.late", type="task", status="todo", due=yesterday, parent="proj")
+        _entry(vault, "proj.plain", type="task", status="todo", parent="proj")
+    _entry(work, "other", type="project", status="active")
+    _entry(work, "other.side", type="task", status="todo", parent="other")
+    (personal / "backlog.md").write_text("# Backlog\n\n## Inbox\n- a thought\n")
+    return {"work": work, "personal": personal, "outside": outside, "tmp": tmp_path}
+
+
+class TestMultiVault:
+    def test_all_vaults_labels_rows_and_merges(self, runner, two_vaults):
+        result = runner.invoke(cli, ["daily", "--all-vaults", "-a"], env={"NO_COLOR": "1"})
+        assert result.exit_code == 0, result.output
+        assert "vaults: personal, work" in result.output
+        assert result.output.count("personal › proj") >= 1 and result.output.count("work › proj") >= 1
+        # Same stem in both vaults: two OVERDUE rows, labelled.
+        overdue = [line for line in result.output.splitlines() if "[ ] Late" in line]
+        assert len(overdue) == 2 and "personal › proj" in overdue[0] and "work › proj" in overdue[1]
+        side = next(line for line in result.output.splitlines() if "Side" in line)
+        assert "work › " in side  # NEXT rows carry the vault in the why column
+        assert "1 unprocessed item" in result.output
+
+    def test_vault_option_picks_one_without_prefix(self, runner, two_vaults):
+        result = runner.invoke(cli, ["daily", "--vault", "work", "-a"], env={"NO_COLOR": "1"})
+        assert result.exit_code == 0, result.output
+        assert "›" not in result.output and "vaults:" not in result.output
+        assert "Side" in result.output and "unprocessed" not in result.output
+
+    def test_json_shape_across_vaults(self, runner, two_vaults):
+        payload = json.loads(runner.invoke(cli, ["daily", "--all-vaults", "--json"]).output)
+        assert payload["ok"] is True and payload["revision"] is None
+        assert [v["name"] for v in payload["vaults"]] == ["personal", "work"]
+        for record in payload["vaults"]:
+            assert set(record) == {"name", "path", "revision", "focus", "inbox_count", "error"}
+            assert len(record["revision"]) > 10 and record["error"] is None
+        assert {item["vault"] for item in payload["next"]} == {"personal", "work"}
+        assert payload["follow_up"]["inbox_count"] == 1
+        # NEXT keeps the per-vault order, vault name as the final tie-break.
+        assert [(i["stem"], i["vault"]) for i in payload["next"]][:2] == [
+            ("proj.late", "personal"), ("proj.late", "work")]
+
+    def test_single_vault_json_keeps_revision_and_labels(self, runner, two_vaults):
+        payload = json.loads(runner.invoke(cli, ["daily", "--vault", "work", "--json"]).output)
+        assert isinstance(payload["revision"], str) and len(payload["revision"]) > 10
+        assert [v["name"] for v in payload["vaults"]] == ["work"]
+        assert payload["vaults"][0]["revision"] == payload["revision"]
+        assert {item["vault"] for item in payload["next"]} == {"work"}
+
+    def test_dead_vault_is_reported_not_fatal(self, runner, two_vaults):
+        add_vault("dead", two_vaults["tmp"] / "nowhere")
+        result = runner.invoke(cli, ["daily", "--all-vaults", "--json"])
+        assert result.exit_code == 0, result.output
+        assert "Skipping vault 'dead'" in result.output  # warned on stderr
+        payload = json.loads(result.stdout)             # stdout stays pure JSON
+        dead = next(v for v in payload["vaults"] if v["name"] == "dead")
+        assert dead["error"] == "vault directory not found" and dead["revision"] is None
+        assert {item["vault"] for item in payload["next"]} == {"personal", "work"}
+        text = runner.invoke(cli, ["daily", "--all-vaults"], env={"NO_COLOR": "1"})
+        assert "dead (unreadable)" in text.output
+
+    def test_all_vaults_uses_each_vaults_focus(self, runner, two_vaults, monkeypatch):
+        monkeypatch.chdir(two_vaults["work"])
+        set_focused_project("other")
+        monkeypatch.chdir(two_vaults["outside"])
+        result = runner.invoke(cli, ["daily", "--all-vaults", "-a"], env={"NO_COLOR": "1"})
+        assert result.exit_code == 0, result.output
+        assert "work (focus other)" in result.output
+        assert "Side" in result.output and "work › proj" not in result.output
+        assert "personal › proj" in result.output  # the other vault is not narrowed
+
+    def test_unknown_vault_name_errors(self, runner, two_vaults):
+        result = runner.invoke(cli, ["daily", "--vault", "nope"])
+        assert result.exit_code != 0
+        assert "No vault named 'nope'" in result.output
+        as_json = json.loads(runner.invoke(cli, ["daily", "--vault", "nope", "--json"]).output)
+        assert as_json["ok"] is False
+
+    def test_outside_a_vault_reads_but_never_writes_by_guess(self, runner, two_vaults):
+        # Reading across vaults needs no cwd; writing without a vault still refuses.
+        assert runner.invoke(cli, ["daily", "--all-vaults"]).exit_code == 0
+        result = runner.invoke(cli, ["new", "task", "proj.more", "More", "--no-edit"])
+        assert result.exit_code != 0 and "ambiguous" in result.output
