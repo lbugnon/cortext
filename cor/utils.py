@@ -72,7 +72,28 @@ def pick_vault_interactively(reason: str) -> Path:
     return chosen
 
 
-def require_init(f=None, *, write: bool = True):
+def vault_holding(name: object) -> Path | None:
+    """The one registered vault with a note named exactly `name`, if any.
+
+    Tab completion lists notes without asking which vault, so a full name
+    picked from it already identifies the vault. Partial names don't count:
+    a fuzzy hit in one vault says nothing about which vault the user meant.
+    Neither does a name present in several vaults.
+    """
+    if not isinstance(name, str):
+        return None
+    stem = name.removeprefix("archive/")
+    if not stem or "/" in stem:
+        return None
+    holders = [
+        path for path in get_vaults().values()
+        if (path / f"{stem}.md").is_file()
+        or (path / "archive" / f"{stem}.md").is_file()
+    ]
+    return holders[0] if len(holders) == 1 else None
+
+
+def require_init(f=None, *, write: bool = True, name_arg: str | None = None):
     """Ensure a vault is resolved, unambiguous, and initialized.
 
     Resolution falling through to the config default means neither cwd nor
@@ -85,16 +106,25 @@ def require_init(f=None, *, write: bool = True):
     and keep the old silent fallback. The default is the strict one on
     purpose: a read command mistakenly left strict merely prompts, while a
     write command mistakenly left lax silently corrupts the wrong vault.
+
+    Commands acting on an existing note pass ``name_arg``, the parameter that
+    names it. When that name exists in exactly one registered vault, the name
+    has already chosen the vault and there is nothing left to ask.
     """
     if f is None:
-        return functools.partial(require_init, write=write)
+        return functools.partial(require_init, write=write, name_arg=name_arg)
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         notes_dir, source = resolve_vault()
 
         if write and source == VAULT_SOURCE_CONFIG and not _in_shell_completion():
-            if sys.stdin.isatty():
+            named = vault_holding(kwargs.get(name_arg)) if name_arg else None
+            if named is not None:
+                notes_dir = named
+                # Pinned for the same reason pick_vault_interactively pins.
+                os.environ["COR_VAULT"] = str(named)
+            elif sys.stdin.isatty():
                 notes_dir = pick_vault_interactively(
                     "Not inside a vault, and COR_VAULT is unset."
                 )

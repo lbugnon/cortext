@@ -32,7 +32,7 @@ from ..core.transactions import VaultTransaction
 @click.option("--dry-run", "-n", is_flag=True, help="Preview changes without applying them")
 @click.argument("old_name", shell_complete=complete_existing_name)
 @click.argument("new_name", shell_complete=complete_new_parent)
-@require_init
+@require_init(name_arg="old_name")
 def rename(archived: bool, dry_run: bool, old_name: str, new_name: str):
     """Rename projects/tasks and update all related links.
 

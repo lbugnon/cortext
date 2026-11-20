@@ -52,7 +52,7 @@ def _resolve(name: str, include_archived: bool) -> str | None:
 )
 @click.argument("note", shell_complete=complete_relation_target)
 @click.argument("targets", nargs=-1, required=True, shell_complete=complete_relation_target)
-@require_init
+@require_init(name_arg="note")
 @transactional_command
 def rel_add(field: str, note: str, targets: tuple[str, ...]):
     """Relate NOTE to one or more TARGETS.
@@ -104,7 +104,7 @@ def rel_add(field: str, note: str, targets: tuple[str, ...]):
 )
 @click.argument("note", shell_complete=complete_relation_target)
 @click.argument("targets", nargs=-1, required=True, shell_complete=complete_relation_target)
-@require_init
+@require_init(name_arg="note")
 @transactional_command
 def rel_rm(field: str, note: str, targets: tuple[str, ...]):
     """Remove a relation from NOTE to one or more TARGETS.

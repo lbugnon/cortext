@@ -170,7 +170,7 @@ def _link_predecessors(notes_dir: Path, filepath: Path, continues: tuple[str, ..
 @cli.command()
 @click.option("--archived", "-a", is_flag=True, is_eager=True, help="Include archived files in search")
 @click.argument("name", shell_complete=complete_existing_name)
-@require_init
+@require_init(name_arg="name")
 def edit(archived: bool, name: str):
     """Open a file in your editor.
 
@@ -220,7 +220,7 @@ def edit(archived: bool, name: str):
 @click.option("--delete", "-d", "delete_tags", is_flag=True, help="Remove provided tags instead of adding")
 @click.argument("name", shell_complete=complete_existing_name)
 @click.argument("tags", nargs=-1)
-@require_init
+@require_init(name_arg="name")
 def tag(archived: bool, delete_tags: bool, name: str, tags: tuple[str, ...]):
     """Add or remove tags on one or more notes.
 
@@ -292,7 +292,7 @@ def _apply_tags(stem: str, is_archived: bool, tags: tuple[str, ...], delete_tags
 @click.option("--delete", "-d", "delete_due", is_flag=True, help="Remove the due date instead of setting one")
 @click.argument("name", shell_complete=complete_task_name)
 @click.argument("text", nargs=-1, type=str)
-@require_init
+@require_init(name_arg="name")
 def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
     """Set or remove due dates on one or more tasks using natural language.
 
@@ -369,7 +369,7 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
 @cli.command(name="delete")
 @click.option("--archived", "-a", is_flag=True, help="Include archived files in search")
 @click.argument("name", shell_complete=complete_existing_name)
-@require_init
+@require_init(name_arg="name")
 def delete(archived: bool, name: str):
     """Delete one or more notes and update references.
 
@@ -410,7 +410,7 @@ def delete(archived: bool, name: str):
 @click.argument("name", shell_complete=complete_task_name)
 @click.argument("status", shell_complete=complete_task_status, required=False)
 @click.argument("text", nargs=-1, type=str)
-@require_init
+@require_init(name_arg="name")
 @transactional_command
 def mark(archived: bool, status_option: str | None, name: str, status: str | None, text: tuple[str, ...]):
     """Update task or project status.
@@ -670,7 +670,7 @@ def _update_task_status(
 
 @cli.command()
 @click.argument("name", shell_complete=complete_existing_name)
-@require_init
+@require_init(name_arg="name")
 def expand(name: str):
     """Expand task checklist into individual subtasks.
 
@@ -861,7 +861,7 @@ def _body_start(lines: list[str]) -> int:
 @click.option("--keep", is_flag=True,
               help="Copy the lines instead of moving them.")
 @click.argument("source", shell_complete=complete_existing_name)
-@require_init
+@require_init(name_arg="source")
 def extract(line_range: str, name: str | None, keep: bool, source: str):
     """Turn a block of lines in a note into a task of its own.
 
