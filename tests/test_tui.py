@@ -209,3 +209,50 @@ class TestRunCorInProcess:
             "---\ntype: project\nstatus: active\n---\n\n# Proj\n"
         )
         assert self._app(temp_vault)._run_cor("mark", "proj", "active") is None
+
+
+@pytest.mark.asyncio
+async def test_toggle_notes_shows_and_hides_notes(temp_vault):
+    """'t' toggles note rows; while hidden, parents carry a note-count hint."""
+    from cor.tui.tree_app import ProjectTreeApp, TaskNode
+
+    vault = temp_vault
+    (vault / "proj.md").write_text("---\ntype: project\nstatus: active\n---\n\n# Proj\n")
+    (vault / "proj.task_a.md").write_text("---\ntype: task\nstatus: todo\n---\n\n# Task A\n")
+    (vault / "proj.overview.md").write_text("---\ntype: note\n---\n\n# Overview\n")
+    (vault / "proj.task_a.details.md").write_text("---\ntype: note\n---\n\n# Details\n")
+
+    def rows(tree):
+        out = []
+        def walk(node):
+            for child in node.children:
+                if isinstance(child.data, TaskNode):
+                    out.append((child.data.stem, str(child.label)))
+                walk(child)
+        walk(tree.root)
+        return dict(out)
+
+    app = ProjectTreeApp("proj", vault)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("Tree")
+
+        hidden = rows(tree)
+        assert set(hidden) == {"proj.task_a"}
+        assert "(1 note)" in hidden["proj.task_a"]
+
+        await pilot.press("t")
+        await pilot.pause()
+        shown = rows(tree)
+        assert set(shown) == {"proj.task_a", "proj.overview", "proj.task_a.details"}
+        assert "note" not in shown["proj.task_a"].split("Task A", 1)[1]
+
+        # Status keys must not touch notes.
+        app._set_cursor_to_task("proj.overview")
+        await pilot.press("x")
+        await pilot.pause()
+        assert "status" not in (vault / "proj.overview.md").read_text()
+
+        await pilot.press("t")
+        await pilot.pause()
+        assert set(rows(tree)) == {"proj.task_a"}

@@ -806,6 +806,7 @@ def tree(verbose: bool, depth: int | None, sort: str, interactive: bool, focus: 
       ~          Mark as dropped
       backspace  Mark as todo
       e          Edit in $EDITOR
+      t          Toggle notes
       q          Quit
       ?          Toggle help
 

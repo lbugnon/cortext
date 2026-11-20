@@ -22,7 +22,10 @@ STATUS_KEYS: dict[str, tuple[str, str, str]] = {
     for key, status in STATUS_KEY_BINDINGS.items()
 }
 
-_HELP = "x/o/./~/⌫:status  X/O:+note  n/N:new  m:move  d:delete  e:edit  j/k:nav  q:quit"
+_HELP = "x/o/./~/⌫:status  X/O:+note  n/N:new  m:move  d:delete  e:edit  t:notes  j/k:nav  q:quit"
+
+# Marker for note (non-task) rows; tasks get their status symbol instead.
+_NOTE_SYMBOL = "≡"
 
 
 class NotesSuggester(Suggester):
@@ -48,8 +51,12 @@ class TaskNode:
         self.file_path = file_path
 
     def get_rich_label(self) -> Text:
-        symbol, color = status_style(self.status)
         text = Text()
+        if self.note_type == "note":
+            text.append(_NOTE_SYMBOL, style="dim")
+            text.append(f" {self.title}", style="italic")
+            return text
+        symbol, color = status_style(self.status)
         text.append(symbol, style=color)
         text.append(f" {self.title}")
         return text
@@ -171,17 +178,27 @@ class ProjectTreeApp(App):
         ("m", "move_task", "move"),
         ("d", "delete_task", "delete"),
         ("e", "edit_task", "edit"),
+        ("t", "toggle_notes", "notes"),
         ("q", "quit", "quit"),
     ]
 
-    def __init__(self, focus: str, notes_dir: Path, verbose: bool = False, sort: str = "status"):
+    def __init__(
+        self,
+        focus: str,
+        notes_dir: Path,
+        verbose: bool = False,
+        sort: str = "status",
+        show_notes: bool = False,
+    ):
         self.focus = focus
         self.notes_dir = notes_dir
         self.verbose = verbose
         self.sort = sort
+        self.show_notes = show_notes
         self.focus_note = None
         self.all_notes: list = []
         self.task_nodes: dict[str, TaskNode] = {}
+        self._notes_by_parent: dict[str, list] = {}
         self._input_callback: Callable[[str], None] | None = None
         super().__init__()
 
@@ -201,6 +218,9 @@ class ProjectTreeApp(App):
         self._load_data()
         self._populate_tree()
         self.query_one("#header", Static).update(self._header_text())
+        # The hidden prompt Input is otherwise eligible for initial focus and
+        # would swallow every binding key.
+        self.query_one(Tree).focus()
 
     def _header_text(self) -> Text:
         text = Text()
@@ -249,10 +269,11 @@ class ProjectTreeApp(App):
             return
 
         tasks_by_parent: dict[str, list] = {}
+        notes_by_parent: dict[str, list] = {}
         is_project = self.focus_note.note_type == "project"
 
         for note in self.all_notes:
-            if note.note_type != "task":
+            if note.note_type not in ("task", "note"):
                 continue
             parts = note.path.stem.split(".")
             if len(parts) < 2:
@@ -264,7 +285,9 @@ class ProjectTreeApp(App):
                 if not note.path.stem.startswith(self.focus + "."):
                     continue
             parent = ".".join(parts[:-1])
-            tasks_by_parent.setdefault(parent, []).append(note)
+            bucket = tasks_by_parent if note.note_type == "task" else notes_by_parent
+            bucket.setdefault(parent, []).append(note)
+        self._notes_by_parent = notes_by_parent
 
         def sort_tasks(tasks: list) -> list:
             if self.sort == "alphabetical":
@@ -273,7 +296,7 @@ class ProjectTreeApp(App):
             return sorted(tasks, key=lambda t: (status_order.get(t.status, 3), t.path.stem))
 
         self.task_nodes = {}
-        for tasks in tasks_by_parent.values():
+        for tasks in [*tasks_by_parent.values(), *notes_by_parent.values()]:
             for task in tasks:
                 self.task_nodes[task.path.stem] = TaskNode(
                     stem=task.path.stem,
@@ -289,11 +312,22 @@ class ProjectTreeApp(App):
         if preserve_cursor_stem:
             self._set_cursor_to_task(preserve_cursor_stem)
 
-    def _build_subtree(self, parent_node, parent_stem, tasks_by_parent, sort_fn) -> None:
-        if parent_stem not in tasks_by_parent:
-            return
+    def _has_children(self, stem: str, tasks_by_parent: dict) -> bool:
+        if stem in tasks_by_parent:
+            return True
+        return self.show_notes and stem in self._notes_by_parent
 
-        tasks = sort_fn(tasks_by_parent[parent_stem])
+    def _note_count_suffix(self, stem: str) -> Text | None:
+        """Dim '(N notes)' hint shown while notes are hidden."""
+        if self.show_notes:
+            return None
+        count = len(self._notes_by_parent.get(stem, []))
+        if not count:
+            return None
+        return Text(f"  ({count} note{'s' if count != 1 else ''})", style="dim")
+
+    def _build_subtree(self, parent_node, parent_stem, tasks_by_parent, sort_fn) -> None:
+        tasks = sort_fn(tasks_by_parent.get(parent_stem, []))
         separator_transitions = [
             ({"blocked", "active", "waiting"}, {"todo"}),
             ({"todo"}, {"dropped", "done"}),
@@ -312,8 +346,12 @@ class ProjectTreeApp(App):
                         sep_node.allow_expand = False
                         break
 
-            has_children = task.path.stem in tasks_by_parent
-            node = parent_node.add(task_node.get_rich_label(), data=task_node)
+            has_children = self._has_children(task.path.stem, tasks_by_parent)
+            label = task_node.get_rich_label()
+            suffix = self._note_count_suffix(task.path.stem)
+            if suffix:
+                label.append_text(suffix)
+            node = parent_node.add(label, data=task_node)
 
             if has_children:
                 self._build_subtree(node, task.path.stem, tasks_by_parent, sort_fn)
@@ -322,6 +360,19 @@ class ProjectTreeApp(App):
                 node.allow_expand = False
 
             prev_status = task.status
+
+        if self.show_notes:
+            notes = sorted(self._notes_by_parent.get(parent_stem, []), key=lambda n: n.path.stem.lower())
+            for note in notes:
+                note_node = self.task_nodes.get(note.path.stem)
+                if not note_node:
+                    continue
+                node = parent_node.add(note_node.get_rich_label(), data=note_node)
+                if self._has_children(note.path.stem, tasks_by_parent):
+                    self._build_subtree(node, note.path.stem, tasks_by_parent, sort_fn)
+                    node.expand()
+                else:
+                    node.allow_expand = False
 
     # ── Input prompt machinery ────────────────────────────────────────────────
 
@@ -520,7 +571,10 @@ class ProjectTreeApp(App):
         preview = self.query_one("#preview-content", Static)
         
         if task:
-            symbol, color = status_style(task.status)
+            if task.is_task:
+                symbol, color = status_style(task.status)
+            else:
+                symbol, color = _NOTE_SYMBOL, "dim"
             text = Text()
             text.append(f"{symbol} ", style=color)
             text.append(f"{task.title}  ", style="bold")
@@ -707,8 +761,23 @@ class ProjectTreeApp(App):
     def action_new_subtask(self) -> None:
         """Create a new task as a child of the selected task."""
         task = self._get_selected_task()
+        if task and not task.is_task:
+            # Notes don't hold subtasks; fall back to the note's parent.
+            self.action_new_sibling()
+            return
         prefix = (task.stem if task else self.focus) + "."
         self._new_task(prefix)
+
+    def action_toggle_notes(self) -> None:
+        """Show or hide notes attached to the project/tasks."""
+        self.show_notes = not self.show_notes
+        current = self._get_selected_task()
+        keep = current.stem if current else None
+        if current and not current.is_task and not self.show_notes:
+            # The selected note is about to disappear; land on its parent.
+            keep = ".".join(current.stem.split(".")[:-1])
+        self._populate_tree(preserve_cursor_stem=keep)
+        self.notify("notes shown" if self.show_notes else "notes hidden", timeout=1.5)
 
     def action_move_task(self) -> None:
         """Move selected task to a different group."""
