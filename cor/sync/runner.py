@@ -7,6 +7,7 @@ This module contains file manipulation operations that can be run:
 
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any
 import frontmatter
 
 from ..schema import VALID_PRIORITY, VALID_PROJECT_STATUS, VALID_TASK_STATUS, STATUS_SYMBOLS
+from ..core.activity import UNKNOWN_STATUS, apply_activity_stamps
 from ..core.links import LinkPatterns
 from ..core.archive import ArchiveManager
 from ..core.files import FileIterator, is_repo_doc, load_note, save_note
@@ -33,6 +35,7 @@ class SyncResult:
     tasks_sorted: list[str] = field(default_factory=list)
     links_updated: list[str] = field(default_factory=list)
     modified_dates_updated: list[str] = field(default_factory=list)
+    activity_stamped: list[str] = field(default_factory=list)  # started/completed written
     deleted_links_removed: list[str] = field(default_factory=list)
     dependencies_updated: list[str] = field(default_factory=list)
     errors: dict[str, list[str]] = field(default_factory=dict)
@@ -314,7 +317,7 @@ class MaintenanceRunner:
         return incomplete
 
     def sync(self, files: list[str], renamed: list[tuple[str, str]] = None,
-             deleted: list[str] = None) -> SyncResult:
+             deleted: list[str] = None, *, against_git: bool = True) -> SyncResult:
         """Run full sync on the given files.
 
         This is the main entry point that runs all maintenance operations
@@ -324,6 +327,11 @@ class MaintenanceRunner:
             files: List of modified/added files to sync
             renamed: List of (old_path, new_path) tuples for renamed files
             deleted: List of deleted files to clean up references for
+            against_git: Compare each file's status with the last commit to
+                stamp started/completed on hand edits (the hook and
+                `cor maintenance sync`). In-process operations already stamp
+                with the previous status they saw, so they pass False and
+                never spawn git.
         """
         result = SyncResult()
         # Repository documents (README.md, AGENTS.md, ...) are not notes: never
@@ -358,10 +366,17 @@ class MaintenanceRunner:
                 if new_path not in staged_files:
                     staged_files.append(new_path)
     
-        # Update modified dates
+        # Stamp started/completed on status changes made by hand in the
+        # editor (the batch operations stamp as they write, so this is a
+        # no-op for them). A stamped file is reported as modified too, so a
+        # hook that only re-stages `modified_dates_updated` picks it up.
         for filepath in staged_files:
-            if self.update_modified_date(filepath):
-                result.modified_dates_updated.append(filepath)
+            stamped = against_git and self.stamp_activity(filepath)
+            if stamped:
+                result.activity_stamped.append(filepath)
+            if self.update_modified_date(filepath) or stamped:
+                if filepath not in result.modified_dates_updated:
+                    result.modified_dates_updated.append(filepath)
 
         # Self-heal stale link prefixes (archive/, ../) so that links resolve
         # to where their targets actually live, before validation rejects them.
@@ -487,6 +502,61 @@ class MaintenanceRunner:
                     errors.extend(dep_errors)
 
         return errors
+
+    def _resolve_staged_path(self, filepath: str) -> Path | None:
+        path = Path(filepath)
+        if not path.exists():
+            path = self.notes_dir / filepath
+        return path if path.exists() else None
+
+    def _committed_status(self, path: Path):
+        """The entry's status in the last commit, or ``UNKNOWN_STATUS``.
+
+        Looks at HEAD and, during a merge, at MERGE_HEAD, so files that are
+        new to one side but unchanged on the other are not treated as fresh.
+        A path form relative to the vault (``HEAD:./x.md``) keeps this correct
+        when the vault is a subdirectory of the repository.
+        """
+        try:
+            rel = path.resolve().relative_to(self.notes_dir.resolve())
+        except ValueError:
+            return UNKNOWN_STATUS
+        refs = ["HEAD"]
+        if (self.notes_dir / ".git" / "MERGE_HEAD").exists():
+            refs.append("MERGE_HEAD")
+        for ref in refs:
+            try:
+                shown = subprocess.run(
+                    ["git", "show", f"{ref}:./{rel.as_posix()}"],
+                    cwd=self.notes_dir, capture_output=True, text=True, check=False,
+                )
+            except (OSError, ValueError):
+                return UNKNOWN_STATUS
+            if shown.returncode != 0:
+                continue
+            try:
+                post = frontmatter.loads(shown.stdout)
+            except Exception:
+                return UNKNOWN_STATUS
+            status = post.get("status")
+            if status is None:
+                status = "todo" if post.get("type") == "task" else "planning"
+            return status
+        return UNKNOWN_STATUS
+
+    def stamp_activity(self, filepath: str) -> bool:
+        """Stamp started/completed against the committed status. Returns True if changed."""
+        path = self._resolve_staged_path(filepath)
+        if path is None:
+            return False
+        post = load_note(path)
+        if post is None or post.get("type") not in ("task", "project"):
+            return False
+        if not apply_activity_stamps(post, previous_status=self._committed_status(path)):
+            return False
+        if not self.dry_run:
+            save_note(path, post)
+        return True
 
     def update_modified_date(self, filepath: str) -> bool:
         """Update the modified date in frontmatter. Returns True if changed."""
@@ -869,6 +939,7 @@ class MaintenanceRunner:
         post = load_note(parent_path)
         if post and post.get('status') == 'done':
             post['status'] = 'active'
+            apply_activity_stamps(post, previous_status='done')
 
         if not self.dry_run:
             # Move file to the active location, writing updated content if it
@@ -1281,6 +1352,7 @@ class MaintenanceRunner:
             if not added:
                 new_metadata['status'] = new_status
             post.metadata = new_metadata
+        apply_activity_stamps(post, previous_status=current_status)
 
         if not self.dry_run:
             save_note(filepath, post)

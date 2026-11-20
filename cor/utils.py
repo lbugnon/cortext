@@ -93,7 +93,8 @@ def vault_holding(name: object) -> Path | None:
     return holders[0] if len(holders) == 1 else None
 
 
-def require_init(f=None, *, write: bool = True, name_arg: str | None = None):
+def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
+                 unless: tuple[str, ...] = ()):
     """Ensure a vault is resolved, unambiguous, and initialized.
 
     Resolution falling through to the config default means neither cwd nor
@@ -110,12 +111,21 @@ def require_init(f=None, *, write: bool = True, name_arg: str | None = None):
     Commands acting on an existing note pass ``name_arg``, the parameter that
     names it. When that name exists in exactly one registered vault, the name
     has already chosen the vault and there is nothing left to ask.
+
+    ``unless`` names parameters that, when truthy, select vaults explicitly
+    (``cor daily --all`` / ``--vault``): resolution is skipped entirely and
+    the command iterates the registry itself. Read-only commands only; a
+    write command must never bypass the guard.
     """
     if f is None:
-        return functools.partial(require_init, write=write, name_arg=name_arg)
+        return functools.partial(require_init, write=write, name_arg=name_arg, unless=unless)
+    if unless and write:
+        raise ValueError("require_init(unless=...) is only for read-only commands")
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        if any(kwargs.get(param) for param in unless):
+            return f(*args, **kwargs)
         notes_dir, source = resolve_vault()
 
         if write and source == VAULT_SOURCE_CONFIG and not _in_shell_completion():

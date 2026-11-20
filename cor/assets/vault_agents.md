@@ -24,13 +24,26 @@ run from this directory. Read them fully before acting.
    transaction is reported as interrupted (`cor history --json`,
    `cor recover`).
 
+## Vaults
+
+`cor vault list` prints the registered vaults and which one is active, and
+why. Reads resolve the vault from `COR_VAULT`, then the current directory,
+then the config default. Writes refuse the default: outside a vault, every
+`cor batch` needs `COR_VAULT=<path>` set explicitly. When several vaults are
+registered and nothing selects one, ask; never guess. `cor daily --all-vaults
+--json` is the overview across vaults: every row carries `vault`, and
+`vaults[]` gives each vault's `path` (for `COR_VAULT`) and `revision` (for
+`--expect-revision`). A stem can exist in two vaults; `vault` tells them apart.
+
 ## Read with cor, not with cat
 
 Reading files for context is fine. Stems, statuses, dates and revisions must
 come from cor so they are exact:
 
-- `cor daily --json [tag] [--days N]`: overdue, today, upcoming, ranked next
-  actions with `reasons`, follow-ups, and the vault `revision`.
+- `cor daily --json [tag] [--days N] [--vault NAME | --all-vaults]`: overdue,
+  today, upcoming, ranked next actions with `reasons`, follow-ups (`stale`
+  deadlines, `waiting`, `blocked`, `stuck_projects`, `idle_projects`,
+  `inbox_count`), and the vault `revision`.
 - `cor search --json '<filters>'`: inventory. Filters: `status:`, `#tag`,
   `project:`, `type:`, `priority:` (`low|medium|high|none`), `due:`
   (`overdue|today|week|none|YYYY-MM-DD|<=YYYY-MM-DD|>=YYYY-MM-DD`). Add `-a`
@@ -81,8 +94,9 @@ An entry records the decision and the result, not the engineering.
 - Semantics to remember: `update.metadata.tags` replaces the whole list (read
   it first), while `transition.metadata.tags` merges. Marking `done` or
   `dropped` is refused while children are open. `type`, `created`,
-  `modified`, `parent`, `status`, `requires`, `continues` and `related` cannot
-  be set through `update`; use `transition` or `relate`.
+  `modified`, `started`, `completed`, `parent`, `status`, `requires`,
+  `continues` and `related` cannot be set through `update`; use `transition`
+  or `relate`. `started` and `completed` are stamped by the transition itself.
 
 ## Vocabulary
 
@@ -90,6 +104,8 @@ An entry records the decision and the result, not the engineering.
 - Project status: `planning`, `active`, `paused`, `done`.
 - Priority: `low`, `medium`, `high`.
 - Due: `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`.
+- Project `cadence`: expected days between advances (default 7); beyond it
+  the daily view lists the project as idle and boosts its best task.
 - Sections: projects have `Summary`, `Goal`, `Done When`, `Scope`, `Risks`,
   `Tasks`, `References`; tasks have `Description` and `Solution`.
 
@@ -97,18 +113,24 @@ An entry records the decision and the result, not the engineering.
 
 When asked for the daily briefing (or "what should I do today"):
 
-1. Run `cor daily --json`, adding a tag if one was given. If `focus` is set,
+1. Pick the vault: the active one, or `--all-vaults` for the overview. Writes
+   go to one vault, selected with `COR_VAULT`.
+2. Run `cor daily --json`, adding a tag if one was given. If `focus` is set,
    say so.
-2. Present, in about fifteen lines: overdue and today's items (stem, title,
-   due, days), the top three to five `next` items with their `reasons`, then
-   follow-ups (`waiting`, `blocked`, `stuck_projects`, `inbox_count`). Report
-   nothing that is not in the JSON.
-3. Ask what to adjust: reschedule, reprioritise, mark waiting or blocked or
+3. Present, in about fifteen lines: overdue and today's items (stem, title,
+   due, days), the top three to five `next` items with their `reasons` (a
+   `project idle Nd` reason means that project has not moved for N days; say
+   so), then follow-ups: `stale` deadlines (propose a new `due` or
+   `dropped`), `waiting`, `blocked`, `stuck_projects`, `idle_projects`
+   (propose one of its tasks, or `paused`), `inbox_count`. Report nothing
+   that is not in the JSON. The list is computed from the vault each time;
+   do not keep a separate list of the day.
+4. Ask what to adjust: reschedule, reprioritise, mark waiting or blocked or
    done, add a `requires` link.
-4. Build one manifest for the agreed changes, run it with `--dry-run`, and
+5. Build one manifest for the agreed changes, run it with `--dry-run`, and
    show the intent as a table (stem, field, old value, new value). Wait for an
    explicit yes.
-5. Apply with `request_id` and `--expect-revision`, run `cor validate --json`,
+6. Apply with `request_id` and `--expect-revision`, run `cor validate --json`,
    and report the transaction id with the matching `cor undo <id>` hint.
 
 Minimal manifest:

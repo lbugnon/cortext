@@ -725,3 +725,84 @@ def test_hook_leaves_repository_documents_untouched(temp_vault):
     assert code == 0, out + err
     assert agents.read_text().startswith("# Working in this vault")
     assert readme.read_text() == "# Readme\n"
+
+
+class TestActivityStamps:
+    """started/completed are stamped by the hook when status is edited by hand."""
+
+    def _init_commit(self, vault: Path, *files: Path) -> None:
+        stage_files(vault, *files)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=vault, capture_output=True)
+
+    def test_hand_edited_status_stamped_on_commit(self, project_with_tasks):
+        vault, task1 = project_with_tasks["vault"], project_with_tasks["task1"]
+        self._init_commit(vault, project_with_tasks["project"], task1)
+        assert "started" not in get_frontmatter(task1)
+
+        set_status(task1, "active")
+        stage_files(vault, task1)
+        returncode, stdout, stderr = run_precommit(vault)
+        assert returncode == 0, stderr
+        assert "Stamped started/completed in" in stdout
+        started = get_frontmatter(task1)["started"]
+        assert started
+        subprocess.run(["git", "commit", "-q", "-m", "active"], cwd=vault, capture_output=True)
+
+        set_status(task1, "done")
+        stage_files(vault, task1)
+        returncode, _, stderr = run_precommit(vault)
+        assert returncode == 0, stderr
+        archived = get_frontmatter(vault / "archive" / "myproject.task1.md")
+        assert archived["completed"] and archived["started"] == started
+
+    def test_unchanged_done_files_not_restamped_on_bulk_commit(self, temp_vault):
+        legacy = temp_vault / "archive" / "legacy.old.md"
+        legacy.write_text("---\ncreated: 2026-01-01 10:00\nmodified: 2026-01-01 10:00\ntype: task\n"
+                          "status: done\nparent: legacy\n---\n# Old\n")
+        self._init_commit(temp_vault, legacy)
+        # A later commit touches the file without changing its status.
+        legacy.write_text(legacy.read_text() + "\nSome edit.\n")
+        stage_files(temp_vault, legacy)
+        returncode, stdout, stderr = run_precommit(temp_vault)
+        assert returncode == 0, stderr
+        meta = get_frontmatter(legacy)
+        assert "completed" not in meta and "Stamped" not in stdout
+        assert meta["modified"] != "2026-01-01 10:00"  # modified is still re-stamped, as before
+
+    def test_merge_of_unchanged_done_files_not_restamped(self, temp_vault):
+        project = temp_vault / "base.md"
+        project.write_text("---\ncreated: 2026-01-01 10:00\nmodified: 2026-01-01 10:00\n"
+                           "type: project\nstatus: planning\n---\n# Base\n")
+        self._init_commit(temp_vault, project)
+        branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=temp_vault,
+                                capture_output=True, text=True).stdout.strip()
+        # The other side of the merge carries a finished task without a stamp.
+        subprocess.run(["git", "checkout", "-q", "-b", "other"], cwd=temp_vault, capture_output=True)
+        done = temp_vault / "archive" / "legacy.old.md"
+        done.write_text("---\ncreated: 2026-01-01 10:00\nmodified: 2026-01-01 10:00\ntype: task\n"
+                        "status: done\nparent: legacy\n---\n# Old\n")
+        self._init_commit(temp_vault, done)
+        other_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=temp_vault,
+                                   capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "checkout", "-q", branch], cwd=temp_vault, capture_output=True)
+        assert not done.exists()
+        # Simulate the merge commit: file arrives in the worktree, MERGE_HEAD is set.
+        done.parent.mkdir(exist_ok=True)  # git drops the empty archive/ on checkout
+        done.write_text("---\ncreated: 2026-01-01 10:00\nmodified: 2026-01-01 10:00\ntype: task\n"
+                        "status: done\nparent: legacy\n---\n# Old\n")
+        (temp_vault / ".git" / "MERGE_HEAD").write_text(other_sha + "\n")
+        stage_files(temp_vault, done)
+        returncode, stdout, stderr = run_precommit(temp_vault)
+        (temp_vault / ".git" / "MERGE_HEAD").unlink()
+        assert returncode == 0, stderr
+        assert "completed" not in get_frontmatter(done)
+
+    def test_group_derived_status_stamps_started(self, project_with_group):
+        vault = project_with_group["vault"]
+        subtask1, group = project_with_group["subtask1"], project_with_group["group"]
+        set_status(subtask1, "active")
+        stage_files(vault, subtask1)
+        returncode, _, stderr = run_precommit(vault)
+        assert returncode == 0, stderr
+        meta = get_frontmatter(group)
+        assert meta["status"] == "active" and meta["started"]

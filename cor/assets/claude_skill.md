@@ -8,18 +8,25 @@ description: Read and write the user's Cor vault of projects, tasks and notes fr
 The user keeps projects, tasks and notes in a Cor vault: flat Markdown files with
 YAML frontmatter, one file per entry, git-versioned.
 
-The `cor` CLI resolves the vault from `~/.config/cor/config.yaml` no matter where
-the session was started, so these commands work from any directory. Confirm with
-`cor status` — its `Vault:` line is the vault in use, and `cor vault` lists the
-configured vaults. The vault's own `AGENTS.md` is the full reference and is worth
-reading before a non-trivial change.
+Reads resolve the vault from `COR_VAULT`, then the current directory, then the
+config default, so `cor daily`, `cor search` and `cor get` work from any
+directory; `cor status` shows the vault in use. Writes refuse the default:
+outside a vault, set `COR_VAULT=<path>` for every `cor batch`. `cor vault list`
+shows the registered vaults; when there are several and nothing selects one,
+ask, never guess. `cor daily --all-vaults --json` reads them all at once (rows
+carry `vault`; `vaults[]` has each vault's `path` and `revision`). The vault's
+own `AGENTS.md` is the full reference and is worth reading before a non-trivial
+change.
 
 ## Read with cor, not with cat
 
 Stems, statuses, dates and revisions must come from cor so they are exact.
 
-- `cor daily --json [tag] [--days N]` — overdue, today, upcoming, ranked next
-  actions with `reasons`, follow-ups, and the vault `revision`.
+- `cor daily --json [tag] [--days N] [--vault NAME | --all-vaults]` — overdue,
+  today, upcoming, ranked next actions with `reasons`, follow-ups (`stale`
+  deadlines to reschedule or drop, `waiting`, `blocked`, `stuck_projects`,
+  `idle_projects`, `inbox_count`), and the vault `revision`. The list is
+  computed from the vault each time; never keep a separate list of the day.
 - `cor search --json '<filters>'` — inventory. Filters: `status:`, `#tag`,
   `project:`, `type:`, `priority:`, `due:`. `-a` includes the archive.
 - `cor get <stem> --json [--body]` — one entry with its sections and `revision`.

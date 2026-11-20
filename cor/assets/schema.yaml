@@ -14,6 +14,18 @@ common:
     description: Datetime file was last modified
     auto: true  # Updated by git pre-commit hook
 
+  started:
+    type: date
+    format: YYYY-MM-DD HH:MM
+    description: When the entry first became active. Kept when it is reopened.
+    auto: true  # Stamped on the status change (cor mark, cor batch, or the pre-commit hook)
+
+  completed:
+    type: date
+    format: YYYY-MM-DD HH:MM
+    description: When the entry was marked done or dropped. Cleared when it is reopened.
+    auto: true  # Stamped on the status change; `cor weekly` and project activity read it
+
   tags:
     type: list
     items: string
@@ -46,6 +58,15 @@ project:
     type: list
     items: string
     description: List of task/project stems this project requires (soft dependencies)
+    optional: true
+
+  cadence:
+    type: int
+    description: |
+      Expected days between advances. The daily view treats the project as
+      idle once nothing under it has moved for longer than this, lists it
+      under FOLLOW-UP and gives its best task a bounded urgency bonus.
+      Unset means the configured default (`agenda.project_cadence_days`, 7).
     optional: true
 
   continues:

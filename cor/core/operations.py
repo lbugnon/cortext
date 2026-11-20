@@ -17,6 +17,7 @@ from .content import sections as read_sections
 from .content import set_section
 from .continuation import apply_continuation_context
 from .files import save_note
+from .activity import UNKNOWN_STATUS, apply_activity_stamps
 from .relations import _all_notes, add_relation, remove_relation
 from .storage import content_revision
 from .transactions import managed_files, transactional_operation, vault_revision
@@ -24,7 +25,7 @@ from .transactions import managed_files, transactional_operation, vault_revision
 
 PROTECTED_METADATA = {
     "type", "created", "modified", "parent", "status",
-    "requires", "continues", "related",
+    "requires", "continues", "related", "started", "completed",
 }
 
 
@@ -143,7 +144,9 @@ def _ensure_parents(notes_dir: Path, stem: str, child_type: str) -> None:
             ArchiveManager(notes_dir).unarchive_file(archived)
             post = frontmatter.load(active)
             if post.get("status") in {"done", "dropped"}:
+                previous = post.get("status")
                 post["status"] = "todo" if post.get("type") == "task" else "planning"
+                apply_activity_stamps(post, previous_status=previous)
                 save_note(active, post)
         if active.exists():
             continue
@@ -184,11 +187,13 @@ def create_entry(
     )
     post = frontmatter.loads(content)
     for key, value in (metadata or {}).items():
-        if key in {"type", "created", "modified", "parent", "requires", "continues", "related"}:
+        if key in {"type", "created", "modified", "parent", "requires", "continues", "related",
+                   "started", "completed"}:
             raise ValidationError(f"Metadata field is managed by Cortex: {key}")
         post[key] = value
     if post.get("status") in {"done", "dropped"}:
         raise ValidationError("Create active work first, then use a transition operation.")
+    apply_activity_stamps(post, previous_status=UNKNOWN_STATUS)
     for heading, value in (section_values or {}).items():
         post.content = set_section(post.content, heading, value)
     save_note(active, post)
@@ -223,7 +228,7 @@ def update_entry(
     for heading, value in (append_sections or {}).items():
         post.content = set_section(post.content, heading, value, append=True)
     save_note(path, post)
-    MaintenanceRunner(notes_dir).sync([str(path)])
+    MaintenanceRunner(notes_dir).sync([str(path)], against_git=False)
     return get_entry(notes_dir, stem)
 
 
@@ -257,6 +262,7 @@ def transition_entry(
             raise ValidationError(
                 f"Cannot mark as {status}; incomplete children: {', '.join(incomplete)}"
             )
+    previous_status = post.get("status")
     post["status"] = status
     for key, value in (metadata or {}).items():
         if key in PROTECTED_METADATA:
@@ -271,12 +277,13 @@ def transition_entry(
                 existing = [existing]
             value = existing + [tag for tag in value if tag not in existing]
         post[key] = value
+    apply_activity_stamps(post, previous_status=previous_status)
     if result and result.strip():
         heading = "Solution" if note_type == "task" else "Summary"
         post.content = set_section(post.content, heading, result, append=True)
     save_note(path, post)
     if sync:
-        MaintenanceRunner(notes_dir).sync([str(path)])
+        MaintenanceRunner(notes_dir).sync([str(path)], against_git=False)
     return get_entry(notes_dir, stem)
 
 
@@ -299,7 +306,7 @@ def relate_entries(
     if changed and relation == "continues" and not remove:
         apply_continuation_context(notes_dir, path, changed)
     if changed:
-        MaintenanceRunner(notes_dir).sync([str(path)])
+        MaintenanceRunner(notes_dir).sync([str(path)], against_git=False)
     return {
         "stem": stem,
         "relation": relation,

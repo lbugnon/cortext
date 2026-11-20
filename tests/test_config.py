@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from cor.config import (
+    for_each_vault,
     VAULT_SOURCE_CONFIG,
     VAULT_SOURCE_CWD,
     VAULT_SOURCE_ENV,
@@ -253,3 +254,41 @@ def test_legacy_global_focus_is_still_honoured(tmp_path, monkeypatch):
     monkeypatch.chdir(vault)
 
     assert get_focused_project() == "legacyproj"
+
+
+# --- iterating the registry ---
+
+
+def test_for_each_vault_lists_sorted_or_chosen(tmp_path, monkeypatch):
+    _isolate_config(monkeypatch, tmp_path, vault_in_config=None)
+    work = _make_vault(tmp_path, "work")
+    personal = _make_vault(tmp_path, "personal")
+    add_vault("work", work)
+    add_vault("personal", personal)
+    assert for_each_vault() == [("personal", personal), ("work", work)]
+    assert for_each_vault(["work"]) == [("work", work)]
+    assert for_each_vault(["work", "personal"]) == [("work", work), ("personal", personal)]
+
+
+def test_for_each_vault_errors(tmp_path, monkeypatch):
+    _isolate_config(monkeypatch, tmp_path, vault_in_config=None)
+    with pytest.raises(ConfigError):
+        for_each_vault()
+    add_vault("work", _make_vault(tmp_path, "work"))
+    with pytest.raises(ConfigError, match="No vault named 'nope'"):
+        for_each_vault(["nope"])
+
+
+def test_focused_project_for_an_explicit_vault(tmp_path, monkeypatch):
+    _isolate_config(monkeypatch, tmp_path, vault_in_config=None)
+    work = _make_vault(tmp_path, "work")
+    personal = _make_vault(tmp_path, "personal")
+    add_vault("work", work)
+    add_vault("personal", personal)
+    monkeypatch.chdir(work)
+    set_focused_project("alpha")
+    monkeypatch.chdir(tmp_path)
+    assert get_focused_project("work") == "alpha"
+    assert get_focused_project(work) == "alpha"
+    assert get_focused_project("personal") is None
+    assert get_focused_project(personal) is None

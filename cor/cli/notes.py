@@ -14,6 +14,7 @@ from ..schema import VALID_TASK_STATUS, VALID_PROJECT_STATUS, STATUS_SYMBOLS, DA
 from ..config import get_focused_project
 from ..core.notes import parse_metadata
 from ..core.files import save_note
+from ..core.activity import UNKNOWN_STATUS, apply_activity_stamps
 from ..core.operations import create_entry, relate_entries, resolve_exact, transition_entry
 from ..core.storage import atomic_write_text
 from ..core.transactions import transactional_command
@@ -363,7 +364,7 @@ def due(archived: bool, delete_due: bool, name: str, text: tuple[str, ...]):
 
     if files_to_sync:
         runner = MaintenanceRunner(notes_dir=notes_dir)
-        runner.sync(files_to_sync)
+        runner.sync(files_to_sync, against_git=False)
 
 
 @cli.command(name="delete")
@@ -401,7 +402,7 @@ def delete(archived: bool, name: str):
         click.echo(click.style(f"Deleted {stem}.md", fg="red"))
 
     runner = MaintenanceRunner(notes_dir)
-    runner.sync([], deleted=deleted_paths)
+    runner.sync([], deleted=deleted_paths, against_git=False)
 
 
 @cli.command()
@@ -525,7 +526,7 @@ def mark(archived: bool, status_option: str | None, name: str, status: str | Non
     if bulk:
         if files_to_sync:
             runner = MaintenanceRunner(notes_dir)
-            runner.sync(files_to_sync)
+            runner.sync(files_to_sync, against_git=False)
         symbol = STATUS_SYMBOLS.get(actual_status, "")
         click.echo(
             f"\n{symbol} Updated {updated} task(s) to {click.style(actual_status, bold=True)}"
@@ -783,6 +784,7 @@ def expand(name: str):
         subtask_post = frontmatter.loads(subtask_content)
         subtask_post['status'] = task_status
         subtask_post['title'] = short_title
+        apply_activity_stamps(subtask_post, previous_status=UNKNOWN_STATUS)
         
         # Write subtask with correct status
         save_note(subtask_path, subtask_post)
@@ -964,7 +966,7 @@ def extract(line_range: str, name: str | None, keep: bool, source: str):
         lines[at:at + len(block)] = [link_line]
     atomic_write_text(source_path, "\n".join(lines))
 
-    MaintenanceRunner(notes_dir).sync([str(source_path), str(target_path)])
+    MaintenanceRunner(notes_dir).sync([str(source_path), str(target_path)], against_git=False)
 
     verb = "Copied" if keep else "Moved"
     log_info(f"{verb} {source_stem}.md lines {start}-{end} into {full_stem}")

@@ -22,6 +22,7 @@ from typing import Optional
 import frontmatter
 
 from ..schema import DATE_TIME
+from .activity import STALE_DAYS_DEFAULT
 from .files import is_repo_doc
 
 #: Lifecycle states after which a task or project no longer counts as open.
@@ -48,6 +49,13 @@ class NoteMetadata:
     requires: list[str] = None
     continues: list[str] = None
     related: list[str] = None
+    #: Stamped the first time a task enters ``active`` (kept on reopen).
+    started: Optional[datetime] = None
+    #: Stamped when an entry enters ``done``/``dropped``; cleared on reopen.
+    completed: Optional[datetime] = None
+    #: Projects only: expected days between advances. Beyond it the daily
+    #: view treats the project as idle. Unset means the configured default.
+    cadence: Optional[int] = None
 
     def __post_init__(self):
         """Initialize default values for lists."""
@@ -93,6 +101,9 @@ class NoteMetadata:
             requires=_as_list(meta.get("requires")),
             continues=_as_list(meta.get("continues")),
             related=_as_list(meta.get("related")),
+            started=_parse_date(meta.get("started")),
+            completed=_parse_date(meta.get("completed")),
+            cadence=_as_int(meta.get("cadence")),
         )
 
     def to_dict(self) -> dict:
@@ -112,6 +123,9 @@ class NoteMetadata:
             "requires": self.requires,
             "continues": self.continues,
             "related": self.related,
+            "started": self.started.strftime(DATE_TIME) if self.started else None,
+            "completed": self.completed.strftime(DATE_TIME) if self.completed else None,
+            "cadence": self.cadence,
         }
 
     @property
@@ -195,15 +209,19 @@ class Note(NoteMetadata):
 
     @property
     def is_stale(self) -> bool:
-        """Check if note hasn't been modified in over 14 days.
+        """True when an open entry has not moved for more than
+        :data:`~cor.core.activity.STALE_DAYS_DEFAULT` days.
 
-        Returns:
-            True if stale, False otherwise
+        "Moved" is :func:`~cor.core.activity.note_activity`: the status
+        stamps when present, otherwise the modification date.
         """
-        if not self.modified or self.status in ("done", "paused", "complete"):
+        from .activity import note_activity
+        if self.status in ("done", "paused", "complete"):
             return False
-        days_since = (datetime.today() - self.modified).days
-        return days_since > 14
+        when = note_activity(self).when
+        if not when:
+            return False
+        return (datetime.today() - when).days > STALE_DAYS_DEFAULT
 
     @property
     def days_overdue(self) -> int:
@@ -257,6 +275,9 @@ class Note(NoteMetadata):
             requires=metadata.requires,
             continues=metadata.continues,
             related=metadata.related,
+            started=metadata.started,
+            completed=metadata.completed,
+            cadence=metadata.cadence,
             content=post.content
         )
 
@@ -277,6 +298,19 @@ def _as_list(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip() for v in value if str(v).strip()]
     return []
+
+
+def _as_int(value) -> Optional[int]:
+    """Coerce a hand-editable integer field; anything else is treated as unset."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
 
 
 def _parse_date(value) -> Optional[datetime]:

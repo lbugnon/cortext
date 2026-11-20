@@ -141,6 +141,10 @@ def main():
         print(f"Updated modified date in: {', '.join(result.modified_dates_updated)}")
         files_to_add.update(result.modified_dates_updated)
 
+    if getattr(result, "activity_stamped", None):
+        print(f"Stamped started/completed in: {', '.join(result.activity_stamped)}")
+        files_to_add.update(result.activity_stamped)
+
     if result.unarchived:
         for old, new in result.unarchived:
             print(f"Unarchived: {old} -> {new}")
