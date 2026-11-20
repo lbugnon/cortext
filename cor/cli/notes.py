@@ -55,7 +55,7 @@ from ..search import resolve_file_fuzzy, get_file_path, resolve_task_fuzzy, reso
     shell_complete=complete_predecessor_project,
     help="Project(s) this one continues. Repeatable. Projects only.",
 )
-@require_init
+@require_init(parent_arg="name")
 @transactional_command
 def new(note_type: str, name: str, text: tuple[str, ...], no_edit: bool,
         continues: tuple[str, ...]):

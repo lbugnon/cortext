@@ -93,8 +93,30 @@ def vault_holding(name: object) -> Path | None:
     return holders[0] if len(holders) == 1 else None
 
 
+def vault_holding_parent(name: object) -> Path | None:
+    """The vault a not-yet-existing note `name` belongs in, judged by its parent.
+
+    ``cor new task garden.water`` names a note that exists nowhere yet, but
+    completion offered ``garden.`` from one vault. The nearest ancestor that
+    exists anywhere decides: held by exactly one vault, that vault; held by
+    several, still ambiguous. A name with no dot has no parent to go by.
+    """
+    if not isinstance(name, str) or "/" in name:
+        return None
+    parts = name.split(".")
+    for depth in range(len(parts) - 1, 0, -1):
+        ancestor = ".".join(parts[:depth])
+        if any(
+            (path / f"{ancestor}.md").is_file()
+            or (path / "archive" / f"{ancestor}.md").is_file()
+            for path in get_vaults().values()
+        ):
+            return vault_holding(ancestor)
+    return None
+
+
 def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
-                 unless: tuple[str, ...] = ()):
+                 parent_arg: str | None = None, unless: tuple[str, ...] = ()):
     """Ensure a vault is resolved, unambiguous, and initialized.
 
     Resolution falling through to the config default means neither cwd nor
@@ -113,13 +135,18 @@ def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
     has already chosen the vault and there is nothing left to ask - for read
     commands too, since tab completion outside a vault offers every vault.
 
+    Commands creating a note pass ``parent_arg`` instead: the new name exists
+    nowhere yet, so its nearest existing ancestor chooses the vault
+    (``vault_holding_parent``).
+
     ``unless`` names parameters that, when truthy, select vaults explicitly
     (``cor daily --all`` / ``--vault``): resolution is skipped entirely and
     the command iterates the registry itself. Read-only commands only; a
     write command must never bypass the guard.
     """
     if f is None:
-        return functools.partial(require_init, write=write, name_arg=name_arg, unless=unless)
+        return functools.partial(require_init, write=write, name_arg=name_arg,
+                                 parent_arg=parent_arg, unless=unless)
     if unless and write:
         raise ValueError("require_init(unless=...) is only for read-only commands")
 
@@ -134,6 +161,8 @@ def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
             # vault; a full name picked there identifies its vault, for reads
             # as much as for writes.
             named = vault_holding(kwargs.get(name_arg)) if name_arg else None
+            if named is None and parent_arg:
+                named = vault_holding_parent(kwargs.get(parent_arg))
             if named is not None:
                 notes_dir = named
                 # Pinned for the same reason pick_vault_interactively pins.

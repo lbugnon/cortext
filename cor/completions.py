@@ -11,7 +11,6 @@ from .utils import (
     get_projects,
     get_task_groups,
     get_project_tasks,
-    get_all_notes,
 )
 from .search.completion import complete_files_with_fuzzy, complete_filtered_with_fuzzy
 from .config import (
@@ -209,7 +208,13 @@ def complete_ref(ctx, param, incomplete: str) -> list:
 
 
 def complete_name(ctx, param, incomplete: str) -> list:
-    """Shell completion for task/note names with project prefix."""
+    """Shell completion for task/note names with project prefix.
+
+    Outside any vault, parents and groups come from every registered vault
+    (see _completion_vaults); ``cor new`` then takes its vault from the parent.
+    """
+    from .core.files import FileIterator
+
     # Get note_type from context
     note_type = ctx.params.get("note_type", "")
 
@@ -217,52 +222,59 @@ def complete_name(ctx, param, incomplete: str) -> list:
     if note_type not in ("task", "note"):
         return []
 
+    vaults = [(name, root) for name, root in _completion_vaults() if root.is_dir()]
+    multi = len(vaults) > 1
     parts = incomplete.split(".")
 
     # No dot yet: suggest parent prefixes
     if len(parts) == 1:
         # For tasks: only projects (no dots in name)
         # For notes: all notes (projects + existing notes) can be parents
-        if note_type == "task":
-            parents = get_projects()
-            help_text = "Tasks under {p}"
-        else:
-            parents = get_all_notes()
-            help_text = "Notes under {p}"
+        owners: dict[str, set[str]] = {}
+        for name, root in vaults:
+            if note_type == "task":
+                stems = FileIterator(root).get_project_stems()
+            else:
+                stems = [
+                    p.stem for p in root.glob("*.md")
+                    if p.stem != "backlog" and not p.stem.isupper()
+                ]
+            for stem in stems:
+                owners.setdefault(stem, set()).add(name)
+        help_text = "Tasks under {p}" if note_type == "task" else "Notes under {p}"
 
-        return [
-            CompletionItem(f"{p}.", help=help_text.format(p=p))
-            for p in parents
-            if not incomplete or p.startswith(incomplete)
-        ]
+        return _label_vaults(
+            [
+                CompletionItem(f"{p}.", help=help_text.format(p=p))
+                for p in sorted(owners)
+                if not incomplete or p.startswith(incomplete)
+            ],
+            {f"{stem}.": names for stem, names in owners.items()} if multi else {},
+        )
 
     # One or more dots (project. or project.group.): suggest child groups if any exist
-    if len(parts) >= 2:
-        # Get the current parent hierarchy (everything except the incomplete part at the end)
-        parent_prefix = ".".join(parts[:-1])
-        child_prefix = parts[-1]
-        
-        # Find all children of this parent
-        notes_dir = get_notes_dir()
-        if notes_dir.exists():
-            child_groups = set()
-            pattern = f"{parent_prefix}.*.md"
-            for p in notes_dir.glob(pattern):
-                stem_parts = p.stem.split(".")
-                parent_parts = parent_prefix.split(".")
-                # Direct child is one level deeper
-                if len(stem_parts) == len(parent_parts) + 1:
-                    child_name = stem_parts[-1]
-                    if not child_prefix or child_name.startswith(child_prefix):
-                        child_groups.add(child_name)
-            
-            if child_groups:
-                return [
-                    CompletionItem(f"{parent_prefix}.{g}.", help=f"Tasks in {g}")
-                    for g in sorted(child_groups)
-                ]
+    # Get the current parent hierarchy (everything except the incomplete part at the end)
+    parent_prefix = ".".join(parts[:-1])
+    child_prefix = parts[-1]
+    parent_depth = len(parts) - 1
 
-    return []
+    groups: dict[str, set[str]] = {}
+    for name, root in vaults:
+        for p in root.glob(f"{parent_prefix}.*.md"):
+            stem_parts = p.stem.split(".")
+            # Direct child is one level deeper
+            if len(stem_parts) == parent_depth + 1:
+                child_name = stem_parts[-1]
+                if not child_prefix or child_name.startswith(child_prefix):
+                    groups.setdefault(f"{parent_prefix}.{child_name}.", set()).add(name)
+
+    return _label_vaults(
+        [
+            CompletionItem(value, help=f"Tasks in {value.rstrip('.').rsplit('.', 1)[-1]}")
+            for value in sorted(groups)
+        ],
+        groups if multi else {},
+    )
 
 
 def complete_vault_name(ctx, param, incomplete: str) -> list:
