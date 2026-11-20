@@ -963,7 +963,6 @@ class TestExampleVault:
         assert result.exit_code == 0, result.output
 
 
-<<<<<<< HEAD
 # --------------------------------------------------------------- vault rules
 def test_help_states_the_must_read_rule():
     """The reminder has to be where an agent using cor will see it, not only in docs.
@@ -998,7 +997,8 @@ def test_rules_says_so_when_a_vault_states_none(tmp_path, monkeypatch):
     out = CliRunner().invoke(cli, ["rules"]).output
     assert "no AGENTS.md" in out or "no " in out
     assert "Ask before assuming" in out
-=======
+
+
 class TestInitAgentsFile:
     """`cor init` installs AGENTS.md, the instructions any coding agent reads."""
 
@@ -1058,4 +1058,3 @@ class TestInitAgentsFile:
             assert isinstance(value, (datetime, str)) and value, f"{key} must be a stamp, got {value!r}"
         valid = runner.invoke(cli, ["validate", "--json"])
         assert json.loads(valid.output)["valid"] is True, valid.output
->>>>>>> 61f7c4610e7faffe9fd15944c998ff1aaf6e5430

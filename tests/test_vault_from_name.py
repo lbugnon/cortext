@@ -71,3 +71,79 @@ def test_partial_name_is_still_ambiguous(runner, two_vaults):
     assert result.exit_code != 0
     assert "ambiguous" in result.output
     assert not frontmatter.load(two_vaults["personal"] / "garden.md").get("tags")
+
+
+# --- tab completion outside a vault -------------------------------------------
+
+class _Ctx:
+    """Minimal click context: completers only read ``params``."""
+
+    def __init__(self, **params):
+        self.params = params
+
+
+def _values(items) -> dict[str, str]:
+    return {item.value: item.help or "" for item in items}
+
+
+def test_edit_completion_outside_a_vault_spans_every_vault(runner, two_vaults):
+    from cor.completions import complete_existing_name
+
+    _new_project(runner, two_vaults["work"], "alpha")
+    _new_project(runner, two_vaults["personal"], "garden")
+
+    items = _values(complete_existing_name(_Ctx(), None, ""))
+
+    assert "[work]" in items["alpha"]
+    assert "[personal]" in items["garden"]
+
+
+def test_completion_labels_a_name_held_by_several_vaults(runner, two_vaults):
+    from cor.completions import complete_existing_name
+
+    _new_project(runner, two_vaults["work"], "garden")
+    _new_project(runner, two_vaults["personal"], "garden")
+
+    items = _values(complete_existing_name(_Ctx(), None, "gar"))
+
+    assert list(items) == ["garden"]
+    assert "[personal, work]" in items["garden"]
+
+
+def test_completion_inside_a_vault_stays_in_that_vault(runner, two_vaults, monkeypatch):
+    from cor.completions import complete_existing_name
+
+    _new_project(runner, two_vaults["work"], "alpha")
+    _new_project(runner, two_vaults["personal"], "garden")
+    monkeypatch.chdir(two_vaults["personal"])
+
+    items = _values(complete_existing_name(_Ctx(), None, ""))
+
+    assert "garden" in items and "alpha" not in items
+    assert "[" not in items["garden"]
+
+
+def test_task_completion_outside_a_vault_spans_every_vault(runner, two_vaults):
+    from cor.completions import complete_task_name
+
+    for vault, stem in ((two_vaults["work"], "alpha"), (two_vaults["personal"], "garden")):
+        _new_project(runner, vault, stem)
+        result = runner.invoke(cli, ["new", "task", f"{stem}.water", "--no-edit"],
+                               env={"COR_VAULT": str(vault)})
+        assert result.exit_code == 0, result.output
+
+    items = _values(complete_task_name(_Ctx(), None, ""))
+
+    assert set(items) == {"alpha.water", "garden.water"}
+    assert "[personal]" in items["garden.water"]
+
+
+def test_read_command_outside_a_vault_follows_the_named_note(runner, two_vaults, monkeypatch):
+    # `cor tree` is read-only; it used to read the default vault regardless.
+    _new_project(runner, two_vaults["personal"], "garden")
+
+    result = runner.invoke(cli, ["tree", "garden"])
+
+    assert result.exit_code == 0, result.output
+    assert "Garden" in result.output
+    monkeypatch.delenv("COR_VAULT")

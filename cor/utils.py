@@ -110,7 +110,8 @@ def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
 
     Commands acting on an existing note pass ``name_arg``, the parameter that
     names it. When that name exists in exactly one registered vault, the name
-    has already chosen the vault and there is nothing left to ask.
+    has already chosen the vault and there is nothing left to ask - for read
+    commands too, since tab completion outside a vault offers every vault.
 
     ``unless`` names parameters that, when truthy, select vaults explicitly
     (``cor daily --all`` / ``--vault``): resolution is skipped entirely and
@@ -128,12 +129,17 @@ def require_init(f=None, *, write: bool = True, name_arg: str | None = None,
             return f(*args, **kwargs)
         notes_dir, source = resolve_vault()
 
-        if write and source == VAULT_SOURCE_CONFIG and not _in_shell_completion():
+        if source == VAULT_SOURCE_CONFIG and not _in_shell_completion():
+            # Outside any vault, completion offers notes from every registered
+            # vault; a full name picked there identifies its vault, for reads
+            # as much as for writes.
             named = vault_holding(kwargs.get(name_arg)) if name_arg else None
             if named is not None:
                 notes_dir = named
                 # Pinned for the same reason pick_vault_interactively pins.
                 os.environ["COR_VAULT"] = str(named)
+            elif not write:
+                pass
             elif sys.stdin.isatty():
                 notes_dir = pick_vault_interactively(
                     "Not inside a vault, and COR_VAULT is unset."

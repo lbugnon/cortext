@@ -1,6 +1,7 @@
 """Shell completion functions for Cor CLI."""
 
 import os
+from pathlib import Path
 
 from click.shell_completion import CompletionItem
 
@@ -13,12 +14,102 @@ from .utils import (
     get_all_notes,
 )
 from .search.completion import complete_files_with_fuzzy, complete_filtered_with_fuzzy
-from .config import get_focused_project
+from .config import (
+    VAULT_SOURCE_CONFIG,
+    get_focused_project,
+    get_vaults,
+    resolve_vault,
+)
+from .exceptions import ConfigError
 from .core.files import is_repo_doc
 
 # NOTE: bibtexparser and .bibtex are imported lazily inside complete_ref().
 # .bibtex pulls in .crossref -> habanero -> httpx -> rich, ~340ms, and this
 # module is imported by every `cor` command for its shell completions.
+
+
+# --- vault scope ---------------------------------------------------------------
+
+def _completion_vaults() -> list[tuple[str, Path]]:
+    """The vaults whose notes name completion offers, as ``(name, path)``.
+
+    Inside a vault (cwd or COR_VAULT) that is the one vault, unnamed. Outside
+    any vault the config default is only a guess, and commands taking a note
+    name pick the vault from the full name anyway (``utils.vault_holding``),
+    so every registered vault is offered.
+    """
+    try:
+        path, source = resolve_vault()
+    except ConfigError:
+        return []
+    if source == VAULT_SOURCE_CONFIG:
+        vaults = get_vaults()
+        if len(vaults) > 1:
+            return [(name, vaults[name].expanduser()) for name in sorted(vaults)]
+    return [("", path)]
+
+
+def _collect_stems(keep=None, *, active: bool = True, archived: bool = False):
+    """Note stems for name completion, across the vaults in scope.
+
+    Each vault's own focused project narrows its own stems, so a focus set in
+    one vault never hides another vault's notes.
+
+    Args:
+        keep: Optional ``(path) -> bool`` predicate (e.g. tasks only).
+        active: Collect stems from vault roots.
+        archived: Collect stems from ``archive/``.
+
+    Returns:
+        ``(active_stems, archived_stems, owners)``; ``owners`` maps a stem to
+        the vault names holding it and is empty when only one vault is in scope.
+    """
+    vaults = _completion_vaults()
+    multi = len(vaults) > 1
+    active_stems: dict[str, None] = {}
+    archived_stems: dict[str, None] = {}
+    owners: dict[str, set[str]] = {}
+
+    for name, root in vaults:
+        if not root.is_dir():
+            continue
+        focused = get_focused_project(name if multi else None)
+        sources = []
+        if active:
+            sources.append((root, active_stems))
+        if archived:
+            sources.append((root / "archive", archived_stems))
+        for directory, bucket in sources:
+            if not directory.is_dir():
+                continue
+            for path in directory.glob("*.md"):
+                stem = path.stem
+                if stem == "backlog" or path.name.startswith(".") or is_repo_doc(path):
+                    continue
+                if focused and stem != focused and not stem.startswith(f"{focused}."):
+                    continue
+                if keep is not None and not keep(path):
+                    continue
+                bucket[stem] = None
+                if multi:
+                    owners.setdefault(stem, set()).add(name)
+
+    return list(active_stems), list(archived_stems), owners
+
+
+def _label_vaults(items: list, owners: dict) -> list:
+    """Append the holding vault(s) to each completion's help text."""
+    if not owners:
+        return items
+    labelled = []
+    for item in items:
+        where = ", ".join(sorted(owners.get(item.value.removeprefix("archive/"), ())))
+        if not where:
+            labelled.append(item)
+            continue
+        help_text = f"{item.help} [{where}]" if item.help else f"[{where}]"
+        labelled.append(CompletionItem(item.value, help=help_text))
+    return labelled
 
 
 def complete_ref(ctx, param, incomplete: str) -> list:
@@ -284,58 +375,34 @@ def complete_existing_name(ctx, param, incomplete: str) -> list:
     """Shell completion for existing file names (projects and tasks).
 
     Uses prefix matching first, falls back to fuzzy matching if no prefix matches.
-    When a project is focused, only shows files from that project.
+    When a project is focused, only shows files from that project. Outside any
+    vault, offers notes from every registered vault (see _completion_vaults).
     """
-    notes_dir = get_notes_dir()
-    if not notes_dir.exists():
-        return []
+    from .search import fuzzy_match
+    from .core.files import FileIterator
 
-    archive_dir = notes_dir / "archive"
-
-    # Check if -a/--archived flag is set
     include_archived = ctx.params.get("archived", False)
-
-    # Check if incomplete starts with "archive/"
     is_archive_path = incomplete.startswith("archive/")
     search_stem = incomplete[8:] if is_archive_path else incomplete
 
-    # Get focused project to filter results
-    focused = get_focused_project()
-
-    # Collect file stems
-    file_stems = []
-    archived_stems = []
-
-    if not is_archive_path:
-        for path in notes_dir.glob("*.md"):
-            if path.stem != "backlog" and not path.name.startswith(".") and not is_repo_doc(path):
-                # Filter to focused project if set
-                if focused:
-                    if path.stem == focused or path.stem.startswith(f"{focused}."):
-                        file_stems.append(path.stem)
-                else:
-                    file_stems.append(path.stem)
-
-    if (include_archived or is_archive_path) and archive_dir.exists():
-        for path in archive_dir.glob("*.md"):
-            # Filter to focused project if set
-            if focused:
-                if path.stem == focused or path.stem.startswith(f"{focused}."):
-                    archived_stems.append(path.stem)
-            else:
-                archived_stems.append(path.stem)
-
-    # Use consolidated completion logic
-    from .search import fuzzy_match
-
+    file_stems, archived_stems, owners = _collect_stems(
+        active=not is_archive_path,
+        archived=include_archived or is_archive_path,
+    )
 
     # If the initial string is a prefix of any project name, return only those project(s) as completions
-    projects = get_projects()
-    if search_stem:
+    if search_stem and not is_archive_path:
+        projects = sorted({
+            stem
+            for _, root in _completion_vaults() if root.is_dir()
+            for stem in FileIterator(root).get_project_stems()
+        })
         matching_projects = [p for p in projects if p.startswith(search_stem)]
         if matching_projects:
-            from click.shell_completion import CompletionItem
-            return [CompletionItem(p, help=f"Project {p}") for p in matching_projects]
+            return _label_vaults(
+                [CompletionItem(p, help=f"Project {p}") for p in matching_projects],
+                owners,
+            )
 
     completions = complete_files_with_fuzzy(
         search_stem=search_stem,
@@ -346,7 +413,8 @@ def complete_existing_name(ctx, param, incomplete: str) -> list:
         include_archived=include_archived
     )
     # Sort completions by length of the completion value (shorter first)
-    return sorted(completions, key=lambda c: len(getattr(c, 'value', str(c))))
+    completions = sorted(completions, key=lambda c: len(getattr(c, 'value', str(c))))
+    return _label_vaults(completions, owners)
 
 
 def complete_group_project(ctx, param, incomplete: str) -> list:
@@ -384,66 +452,35 @@ def complete_project_tasks(ctx, param, incomplete: str) -> list:
 
 def complete_task_name(ctx, param, incomplete: str) -> list:
     """Shell completion for task names (type: task in frontmatter).
-    
-    When a project is focused, only shows tasks from that project.
+
+    When a project is focused, only shows tasks from that project. Outside any
+    vault, offers tasks from every registered vault (see _completion_vaults).
     """
     from .core.notes import parse_metadata
     from .search import fuzzy_match
 
-    notes_dir = get_notes_dir()
-    if not notes_dir.exists():
-        return []
-
-    # Check for archive flag
     include_archived = ctx.params.get("archived", False)
-
-    # Handle archive/ prefix
     is_archive_path = incomplete.startswith("archive/")
     search_stem = incomplete[8:] if is_archive_path else incomplete
 
-    # Get focused project to filter results
-    focused = get_focused_project()
+    def is_task(path) -> bool:
+        note = parse_metadata(path)
+        return bool(note and note.note_type == "task")
 
-    tasks = []
-    archived_tasks = []
+    tasks, archived_tasks, owners = _collect_stems(
+        is_task,
+        active=not is_archive_path,
+        archived=include_archived or is_archive_path,
+    )
 
-    # Collect active task file stems
-    if not is_archive_path:
-        for path in notes_dir.glob("*.md"):
-            if path.stem == "backlog" or is_repo_doc(path):
-                continue
-            note = parse_metadata(path)
-            if note and note.note_type == "task":
-                # Filter to focused project if set
-                if focused:
-                    if path.stem == focused or path.stem.startswith(f"{focused}."):
-                        tasks.append(path.stem)
-                else:
-                    tasks.append(path.stem)
-
-    # Collect archived task file stems
-    if include_archived or is_archive_path:
-        archive_dir = notes_dir / "archive"
-        if archive_dir.exists():
-            for path in archive_dir.glob("*.md"):
-                note = parse_metadata(path)
-                if note and note.note_type == "task":
-                    # Filter to focused project if set
-                    if focused:
-                        if path.stem == focused or path.stem.startswith(f"{focused}."):
-                            archived_tasks.append(path.stem)
-                    else:
-                        archived_tasks.append(path.stem)
-
-    # Use consolidated completion logic with archive support
-    return complete_files_with_fuzzy(
+    return _label_vaults(complete_files_with_fuzzy(
         search_stem=search_stem,
         file_stems=tasks,
         archived_stems=archived_tasks,
         fuzzy_match_fn=fuzzy_match,
         is_archive_path=is_archive_path,
         include_archived=include_archived
-    )
+    ), owners)
 
 
 def complete_task_status(ctx, param, incomplete: str) -> list:

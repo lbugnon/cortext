@@ -807,7 +807,7 @@ def weekly(weeks: int, verbose: bool, tag: str | None):
               help="Sort tasks by status (default) or alphabetically")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive mode (vim keys to navigate and edit)")
 @click.argument("focus", shell_complete=complete_existing_name)
-@require_init(write=False)
+@require_init(write=False, name_arg="focus")
 def tree(verbose: bool, depth: int | None, sort: str, interactive: bool, focus: str):
     """Show task tree for a project or task group.
 
